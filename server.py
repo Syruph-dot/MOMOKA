@@ -1,6 +1,6 @@
 """
 MOMOKA HTTP API 服务器
-提供 POST /api/chat、POST /api/judge 和静态文件服务。
+提供会话管理、聊天、评分和静态文件服务。
 """
 
 import json
@@ -19,13 +19,17 @@ import uvicorn
 from agents import Runner, trace
 
 from file_agent import create_agent, skill_loader, memory_store
-from momoka.config import LIKERT_LABELS
+from momoka.config import LIKERT_LABELS, current_work_dir
 from momoka.feedback import analyze_judgment, build_followup_prompt
 from momoka.evolution import generate_evolution_proposals
 from momoka.skill_loader import format_skill_prompt
+from momoka.session_manager import SessionManager
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PROJECT_ROOT / "static"
+
+# 全局会话管理器
+session_manager = SessionManager(memory_store.memory_dir)
 
 
 def check_config() -> dict:
@@ -80,8 +84,72 @@ def extract_tool_calls(result) -> list[dict]:
     return tool_calls
 
 
+# ── 会话管理 ──
+
+
+async def api_create_session(request: Request) -> JSONResponse:
+    """创建新会话。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "请求体必须是 JSON"}, status_code=400)
+
+    goal = body.get("goal", "").strip()
+    folder_path = body.get("folder_path", "").strip()
+
+    if not goal:
+        return JSONResponse({"error": "会话核心目标不能为空"}, status_code=400)
+    if not folder_path:
+        return JSONResponse({"error": "工作文件夹路径不能为空"}, status_code=400)
+
+    folder = Path(folder_path)
+    if not folder.exists():
+        return JSONResponse({"error": f"文件夹不存在：{folder_path}"}, status_code=400)
+    if not folder.is_dir():
+        return JSONResponse({"error": f"路径不是文件夹：{folder_path}"}, status_code=400)
+
+    session = session_manager.create_session(goal=goal, folder_path=str(folder.resolve()))
+    return JSONResponse({"session": session})
+
+
+async def api_list_sessions(_request: Request) -> JSONResponse:
+    """列出所有会话。"""
+    sessions = session_manager.list_sessions()
+    return JSONResponse({"sessions": sessions})
+
+
+async def api_get_session(request: Request) -> JSONResponse:
+    """获取单个会话详情。"""
+    session_id = request.path_params.get("session_id")
+    session = session_manager.get_session(session_id)
+    if not session:
+        return JSONResponse({"error": f"未知会话：{session_id}"}, status_code=404)
+    return JSONResponse({"session": session})
+
+
+async def api_delete_session(request: Request) -> JSONResponse:
+    """删除会话及其消息。"""
+    session_id = request.path_params.get("session_id")
+    if not session_manager.get_session(session_id):
+        return JSONResponse({"error": f"未知会话：{session_id}"}, status_code=404)
+    session_manager.delete_session(session_id)
+    return JSONResponse({"success": True})
+
+
+async def api_get_session_messages(request: Request) -> JSONResponse:
+    """获取会话的消息历史。"""
+    session_id = request.path_params.get("session_id")
+    if not session_manager.get_session(session_id):
+        return JSONResponse({"error": f"未知会话：{session_id}"}, status_code=404)
+    messages = session_manager.get_messages(session_id)
+    return JSONResponse({"messages": messages})
+
+
+# ── 聊天 ──
+
+
 async def api_chat(request: Request) -> JSONResponse:
-    """处理聊天请求。"""
+    """处理聊天请求（支持会话绑定）。"""
     try:
         body = await request.json()
     except Exception:
@@ -91,8 +159,22 @@ async def api_chat(request: Request) -> JSONResponse:
     if not message:
         return JSONResponse({"error": "消息不能为空"}, status_code=400)
 
+    session_id = body.get("session_id", "").strip() or None
     output_id = body.get("output_id", "").strip() or f"out_{uuid.uuid4().hex[:12]}"
     topic = body.get("topic", "").strip() or message[:80]
+
+    # 如果绑定会话，验证并设置工作目录
+    work_dir = None
+    if session_id:
+        session = session_manager.get_session(session_id)
+        if not session:
+            return JSONResponse({"error": f"未知会话：{session_id}"}, status_code=404)
+        work_dir = session.get("folder_path") or None
+        if work_dir:
+            current_work_dir.set(work_dir)
+
+        # 保存用户消息
+        session_manager.add_message(session_id, "user", message)
 
     feedback_boosts = memory_store.get_skill_feedback_boosts()
     matched = skill_loader.match_skills(message, topic=topic, feedback_boosts=feedback_boosts)
@@ -146,6 +228,17 @@ async def api_chat(request: Request) -> JSONResponse:
         tool_calls=tool_calls,
     )
 
+    # 如果绑定会话，保存 Agent 回复
+    if session_id:
+        session_manager.add_message(
+            session_id,
+            "agent",
+            result.final_output,
+            output_id=output_id,
+            matched_skills=matched_names,
+            tool_calls=tool_calls,
+        )
+
     return JSONResponse({
         "output_id": output_id,
         "topic": topic,
@@ -153,6 +246,7 @@ async def api_chat(request: Request) -> JSONResponse:
         "tool_calls": tool_calls,
         "matched_skills": matched_names,
         "skill_reasons": skill_reasons,
+        "session_id": session_id,
     })
 
 
@@ -313,10 +407,46 @@ async def health(_request: Request) -> PlainTextResponse:
     return PlainTextResponse("MOMOKA OK")
 
 
+# ── 静态文件 ──
+STATIC_PATHS = [
+    "index.html",
+    "chat.html",
+    "js/app.js",
+    "js/session.js",
+    "js/chat.js",
+    "css/app.css",
+    "css/syrretro.css",
+    "css/mobile-framework.css",
+    "css/themes/theme-a.css",
+    "css/themes/theme-b.css",
+    "css/themes/theme-c.css",
+    "css/themes/theme-d.css",
+    "css/themes/theme-e.css",
+    "css/themes/aero.css",
+    "css/themes/metro.css",
+    "css/mobile/reset-base.css",
+    "css/mobile/layout.css",
+    "css/mobile/controls.css",
+    "css/mobile/responsive.css",
+    "css/mobile/accessibility.css",
+    "css/ggmetro.css",
+]
+
+html_found = (STATIC_DIR / "index.html").exists()
+print(f"[会话管理] Memory dir: {memory_store.memory_dir}")
+print(f"[静态文件] index.html {'OK' if html_found else 'MISSING'} 存在")
+
 # 路由
 routes = [
     Route("/api/health", health),
     Route("/api/config", api_config),
+    # 会话管理
+    Route("/api/sessions", api_list_sessions),
+    Route("/api/sessions", api_create_session, methods=["POST"]),
+    Route("/api/sessions/{session_id}", api_get_session),
+    Route("/api/sessions/{session_id}", api_delete_session, methods=["DELETE"]),
+    Route("/api/sessions/{session_id}/messages", api_get_session_messages),
+    # 聊天 & 判断
     Route("/api/chat", api_chat, methods=["POST"]),
     Route("/api/judge", api_judge, methods=["POST"]),
     Route("/api/skills", api_skills),

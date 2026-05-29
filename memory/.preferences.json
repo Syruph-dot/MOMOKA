@@ -1,0 +1,49 @@
+{
+  "candidates": [
+    {
+      "id": "pref_20260529195146",
+      "key": "prefer:测试:用户希望继续深化「测试」里被认可的判断路径。",
+      "polarity": "prefer",
+      "signal": "用户希望继续深化「测试」里被认可的判断路径。",
+      "topic": "测试",
+      "count": 2,
+      "confidence": 0.65,
+      "evidence": [
+        {
+          "output_id": "out_1780055500303_zqe592",
+          "score": 7,
+          "context": "✅ 收到。MOMOKA 在线，随时待命。\n\n需要文件操作时直接告诉路径和意图即可。",
+          "timestamp": "2026-05-29T19:51:46.755915"
+        },
+        {
+          "output_id": "out_1780055586386_ojcwjm",
+          "score": 6,
+          "context": "Mini Blog Engine\" (",
+          "timestamp": "2026-05-29T19:53:27.226315"
+        }
+      ],
+      "first_seen": "2026-05-29T19:51:46.755915",
+      "last_seen": "2026-05-29T19:53:27.226315"
+    },
+    {
+      "id": "pref_20260529195351",
+      "key": "avoid:测试:用户可能认为当前回答偏离了「测试」的真实重点。",
+      "polarity": "avoid",
+      "signal": "用户可能认为当前回答偏离了「测试」的真实重点。",
+      "topic": "测试",
+      "count": 1,
+      "confidence": 0.45,
+      "evidence": [
+        {
+          "output_id": "out_6837962e3780",
+          "score": 1,
+          "context": "* **预设标题**: Hello, Filesystem!",
+          "timestamp": "2026-05-29T19:53:51.846817"
+        }
+      ],
+      "first_seen": "2026-05-29T19:53:51.846817",
+      "last_seen": "2026-05-29T19:53:51.846817"
+    }
+  ],
+  "promoted": []
+}

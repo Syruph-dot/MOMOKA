@@ -178,5 +178,5 @@
 .ui-block-a, .ui-block-b, .ui-block-c, .ui-block-d {
     background: #f8f9fa;
     padding: 10px;
-    border-radius: 6px;
+    border-radius: 0;
 }

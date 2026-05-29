@@ -4,5 +4,32 @@
     "score": 5,
     "context": "测试",
     "timestamp": "2026-05-29T14:43:09.535211"
+  },
+  {
+    "output_id": "out_1780055500303_zqe592",
+    "score": 7,
+    "context": "✅ 收到。MOMOKA 在线，随时待命。\n\n需要文件操作时直接告诉路径和意图即可。",
+    "context_source": "full_output",
+    "topic": "测试",
+    "matched_skills": [],
+    "timestamp": "2026-05-29T19:51:46.754408"
+  },
+  {
+    "output_id": "out_1780055586386_ojcwjm",
+    "score": 6,
+    "context": "Mini Blog Engine\" (",
+    "context_source": "selected_text",
+    "topic": "测试",
+    "matched_skills": [],
+    "timestamp": "2026-05-29T19:53:27.225316"
+  },
+  {
+    "output_id": "out_6837962e3780",
+    "score": 1,
+    "context": "* **预设标题**: Hello, Filesystem!",
+    "context_source": "selected_text",
+    "topic": "测试",
+    "matched_skills": [],
+    "timestamp": "2026-05-29T19:53:51.846817"
   }
 ]

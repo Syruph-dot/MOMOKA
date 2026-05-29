@@ -3,6 +3,7 @@ MOMOKA 全局配置 — 项目路径与常量定义。
 """
 
 import os
+import contextvars
 from pathlib import Path
 
 PROJECT_ROOT = Path(os.environ.get("MOMOKA_ROOT", Path(__file__).resolve().parent.parent))
@@ -38,3 +39,8 @@ LIKERT_LABELS = {
     6: "赞同",
     7: "强烈赞同",
 }
+
+# 工作目录上下文变量（async-safe，用于将 Agent 文件工具绑定到会话文件夹）
+current_work_dir: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_work_dir", default=None
+)

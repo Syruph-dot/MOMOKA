@@ -36,7 +36,7 @@
     0 8px 32px var(--gg-shadow),
     inset 0 1px 0 var(--gg-border-light) !important;
   border: 1px solid var(--gg-border) !important;
-  border-radius: 12px !important;
+  border-radius: 0;
   position: relative;
   overflow: visible;
 }
@@ -81,7 +81,7 @@
   position: absolute;
   top: -3px; left: -3px;
   right: -3px; bottom: -3px;
-  border-radius: inherit;
+  border-radius: 0;
   background: radial-gradient(circle at center, rgba(45, 212, 191, 0.35), transparent 70%);
   filter: blur(3px);
   z-index: -1;
@@ -96,7 +96,7 @@
   position: absolute;
   top: -5px; left: -5px;
   right: -5px; bottom: -5px;
-  border-radius: inherit;
+  border-radius: 0;
   background: radial-gradient(circle at center, rgba(13, 148, 136, 0.45), transparent 65%);
   filter: blur(4px);
   z-index: -1;
@@ -111,7 +111,7 @@
   position: absolute;
   top: -6px; left: -6px;
   right: -6px; bottom: -6px;
-  border-radius: inherit;
+  border-radius: 0;
   background: radial-gradient(circle at center, rgba(17, 94, 89, 0.6), transparent 60%);
   filter: blur(5px);
   z-index: -1;
@@ -123,7 +123,7 @@
 .github-calendar .day {
   transition: all 1000ms ease;
   position: relative;
-  border-radius: 2px;
+  border-radius: 0;
   overflow: visible;
 }
 .github-calendar .day:hover {
@@ -134,7 +134,7 @@
 
 /* ===== 图例 ===== */
 .contrib-legend .legend li {
-  border-radius: 2px;
+  border-radius: 0;
 }
 
 /* ===== 次要文字 ===== */
@@ -164,7 +164,7 @@ text.ContributionCalendar-label {
 .day-tooltip {
   background: var(--gg-tooltip-bg);
   border: 1px solid var(--gg-border-light);
-  border-radius: 8px;
+  border-radius: 0;
   box-shadow: 0 4px 16px var(--gg-shadow-heavy);
   color: var(--gg-text-muted);
 }

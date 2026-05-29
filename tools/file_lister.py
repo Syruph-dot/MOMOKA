@@ -1,11 +1,23 @@
 from pathlib import Path
 from agents import function_tool
+from momoka.config import current_work_dir
+
+
+def _resolve_path(path: str) -> Path:
+    """解析路径：相对路径基于会话工作目录，绝对路径直接使用。"""
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    base = current_work_dir.get()
+    if base:
+        return Path(base) / p
+    return p
 
 
 @function_tool
 def list_files(directory: str = ".") -> str:
     """列出指定目录中的文件和子目录。参数 directory: 目录路径，默认为当前目录。"""
-    p = Path(directory)
+    p = _resolve_path(directory)
     if not p.exists():
         return f"错误：目录 '{directory}' 不存在。"
     if not p.is_dir():

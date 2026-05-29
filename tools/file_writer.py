@@ -1,11 +1,23 @@
 from pathlib import Path
 from agents import function_tool
+from momoka.config import current_work_dir
+
+
+def _resolve_path(path: str) -> Path:
+    """解析路径：相对路径基于会话工作目录，绝对路径直接使用。"""
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    base = current_work_dir.get()
+    if base:
+        return Path(base) / p
+    return p
 
 
 @function_tool
 def write_file(path: str, content: str) -> str:
     """将内容写入指定文本文件（覆盖模式）。参数 path: 文件路径，content: 要写入的内容。"""
-    p = Path(path)
+    p = _resolve_path(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         existed = p.exists()
