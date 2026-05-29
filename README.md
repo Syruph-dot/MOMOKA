@@ -1,5 +1,7 @@
 # MOMOKA — 批注式判断交互协议 · 文件助手 Agent
 
+https://github.com/Syruph-dot/MOMOKA
+
 MOMOKA 是一个基于 [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) 的智能文件助手，运行在 SophDotNet 平台上。它通过 **批注式判断交互协议**（Likert 7 点量表）实现人机之间的高效对齐——用户对 Agent 输出评分的每一次操作，都会自动驱动 Agent 调整后续行为。
 
 ## 特性
