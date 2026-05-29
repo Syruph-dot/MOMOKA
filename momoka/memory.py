@@ -83,6 +83,18 @@ class MemoryStore:
         records = records[-100:]
         path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # -- 获取最近评分记录 ---
+    def get_recent_judgments(self, count: int = 3) -> list[dict]:
+        """读取最近 N 条评分记录。"""
+        path = self.memory_dir / ".dreams" / "short-term-recall.json"
+        if not path.exists():
+            return []
+        try:
+            records = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        return records[-count:]
+
     # -- 上下文注入用 ---
     def get_injectable_context(self) -> str:
         """获取可注入 Agent 上下文的最相关记忆。"""

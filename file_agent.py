@@ -29,7 +29,7 @@ from tools.file_writer import write_file
 from tools.file_lister import list_files
 from tools.file_appender import append_file
 
-from momoka.config import PROMPTS_DIR, SKILLS_DIR, MEMORY_DIR
+from momoka.config import PROMPTS_DIR, SKILLS_DIR, MEMORY_DIR, LIKERT_LABELS
 from momoka.skill_loader import SkillLoader, format_skill_prompt
 from momoka.memory import MemoryStore
 
@@ -60,6 +60,20 @@ def build_system_prompt(user_message: str = "") -> str:
     memory_context = memory_store.get_injectable_context()
     if memory_context.strip():
         parts.append(f"\n## 最近记忆\n{memory_context}")
+
+    # 4. 用户最近反馈（批注判断闭环）
+    recent = memory_store.get_recent_judgments(3)
+    if recent:
+        feedback_lines = ["\n## 用户最近反馈"]
+        for r in recent:
+            text = r.get("context", "")
+            score = r.get("score", 0)
+            feeling = LIKERT_LABELS.get(score, "未知")
+            feedback_lines.append(
+                f"\n<AnnotateText>{{{text}}}</AnnotateText>"
+                f"\n<UserScore>score:{score}, feeling:{feeling}</UserScore>"
+            )
+        parts.append("\n".join(feedback_lines))
 
     return "\n".join(parts)
 

@@ -69,6 +69,16 @@ function renderJudgeBar(outputId) {
     return html;
 }
 
+// --- 文本划选: 捕获用户在 Agent 回复中选中的文本 ---
+document.addEventListener('mouseup', function(e) {
+    const bubble = e.target.closest('.chat-message.agent .msg-bubble');
+    if (!bubble) return;
+    const sel = window.getSelection().toString().trim();
+    if (!sel) return;
+    const bar = bubble.closest('.chat-message').querySelector('.judge-bar');
+    if (bar) bar.dataset.selectedText = sel;
+});
+
 // --- 批注判断 (MOMOKA_PRD 核心交互) ---
 async function sendJudge(outputId, score) {
     // 高亮当前评分
@@ -79,6 +89,15 @@ async function sendJudge(outputId, score) {
     const target = bar.querySelector(`.judge-btn:nth-child(${score + 1})`);
     if (target) target.classList.add('active');
 
+    // 获取用户划选的文本（若无划选则用空字符串兜底）
+    const selectedText = bar.dataset.selectedText || '';
+
+    // 记录标注格式到控制台（可观测性）
+    const labelMap = {1:'强烈反对',2:'反对',3:'不太赞同',4:'中立',5:'有点赞同',6:'赞同',7:'强烈赞同'};
+    const label = labelMap[score] || '未知';
+    const annotation = `<AnnotateText>{${selectedText}}</AnnotateText>\n<UserScore>score:${score}, feeling:${label}</UserScore>`;
+    console.log(`[MOMOKA] 标注格式:\n${annotation}`);
+
     // 发送评分到后端
     try {
         const res = await fetch(`${API_BASE}/judge`, {
@@ -87,7 +106,7 @@ async function sendJudge(outputId, score) {
             body: JSON.stringify({
                 output_id: outputId,
                 score: score,
-                context: document.getElementById('chatInput').placeholder || '',
+                context: selectedText,
             }),
         });
 
@@ -101,6 +120,9 @@ async function sendJudge(outputId, score) {
 
             // 记录到日记忆（轻量版本）
             console.log(`[MOMOKA] 评分: ${score}/7 — ${data.label} — ${data.analysis}`);
+            if (data.annotated_text) {
+                console.log(`[MOMOKA] 标注文本: "${data.annotated_text}"`);
+            }
         }
     } catch (err) {
         console.error('评分提交失败:', err);

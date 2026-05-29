@@ -162,6 +162,7 @@ async def api_judge(request: Request) -> JSONResponse:
         "score": score,
         "label": label,
         "analysis": analysis,
+        "annotated_text": context[:200],
     })
 
 
