@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MOMOKA — 文件助手 Agent</title>
+    <link rel="stylesheet" href="css/mobile-framework.css">
+    <link rel="stylesheet" href="css/ggmetro.css">
+    <link rel="stylesheet" href="css/app.css">
+    <script src="js/app.js" defer></script>
+</head>
+<body class="theme-c aero">
+    <div class="retro-page">
+        <main class="retro-shell" aria-labelledby="appTitle">
+            <!-- 工具栏 -->
+            <div class="retro-toolbar">
+                <span>MOMOKA 文件助手</span>
+                <span>
+                    <span id="status-indicator">
+                        <span class="status-dot idle"></span>就绪
+                    </span>
+                    &nbsp;|&nbsp;
+                    <span id="skill-indicator" style="font-size:10px;color:#999"></span>
+                    &nbsp;|&nbsp;
+                    <a href="#" onclick="clearChat()">清空</a>
+                </span>
+            </div>
+
+            <!-- 三栏主体 -->
+            <section class="retro-card">
+                <!-- 左侧: Agent 状态 -->
+                <aside class="retro-side" aria-label="Agent 状态">
+                    <div class="avatar-box">M</div>
+                    <div class="side-note">
+                        <strong>MOMOKA</strong><br>
+                        文件助手 v1.0<br>
+                        OpenAI Agents SDK
+                    </div>
+                    <div class="side-note" style="margin-top:6px">
+                        <strong>能力</strong><br>
+                        读取文件 · 写入文件<br>
+                        列出目录 · 追加内容<br>
+                        查询时间
+                    </div>
+                    <div class="side-note" style="margin-top:6px">
+                        <strong>交互方式</strong><br>
+                        输入任务描述<br>
+                        使用下方量表评分<br>
+                        Agent 自动学习偏好
+                    </div>
+                </aside>
+
+                <!-- 中间: 对话区 -->
+                <article class="retro-main" id="chatContainer">
+                    <div class="chat-main">
+                        <div class="chat-messages" id="chatMessages">
+                            <div class="chat-message agent" data-output-id="welcome">
+                                <div class="msg-label">MOMOKA</div>
+                                <div class="msg-bubble">
+                                    你好，我是 MOMOKA 文件助手。<br>
+                                    我可以帮你读取、写入、列出文件，也可以追加内容到文件。<br>
+                                    请告诉我你需要什么？
+                                </div>
+                                <!-- 批注评分区域 -->
+                                <div class="judge-bar" data-output-id="welcome">
+                                    <span class="judge-label">评分:</span>
+                                    <button class="judge-btn" onclick="sendJudge('welcome',1)" title="强烈反对">1</button>
+                                    <button class="judge-btn" onclick="sendJudge('welcome',2)" title="反对">2</button>
+                                    <button class="judge-btn" onclick="sendJudge('welcome',3)" title="不太赞同">3</button>
+                                    <button class="judge-btn neutral" onclick="sendJudge('welcome',4)" title="中立">4</button>
+                                    <button class="judge-btn" onclick="sendJudge('welcome',5)" title="有点赞同">5</button>
+                                    <button class="judge-btn" onclick="sendJudge('welcome',6)" title="赞同">6</button>
+                                    <button class="judge-btn" onclick="sendJudge('welcome',7)" title="强烈赞同">7</button>
+                                    <span class="judge-feedback" id="feedback-welcome"></span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chat-input-area">
+                            <input
+                                type="text"
+                                id="chatInput"
+                                placeholder="输入任务，例如: 列出当前目录的文件"
+                                autofocus
+                                onkeydown="if(event.key==='Enter')sendMessage()"
+                            >
+                            <button id="sendBtn" onclick="sendMessage()">发送</button>
+                        </div>
+                    </div>
+                </article>
+
+                <!-- 右侧: 工具调用日志 -->
+                <aside class="retro-aside" aria-label="工具调用日志">
+                    <div class="aside-block">
+                        <div class="aside-title">工具调用日志</div>
+                        <div class="tool-log-list" id="toolLogs">
+                            <div style="color:#999;font-size:12px;padding:8px">
+                                等待工具调用...
+                            </div>
+                        </div>
+                    </div>
+                    <div class="aside-block" style="margin-top:8px">
+                        <div class="aside-title">匹配技能</div>
+                        <div class="aside-list" id="skillTags">
+                            <span style="color:#999;font-size:11px">暂无</span>
+                        </div>
+                    </div>
+                </aside>
+            </section>
+
+            <!-- 底部 -->
+            <footer class="retro-footer">
+                MOMOKA &copy; 2026 SophDotNet · 批注式判断交互协议 · Likert 7-Point Scale
+            </footer>
+        </main>
+    </div>
+</body>
+</html>
