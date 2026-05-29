@@ -1,23 +1,16 @@
 from pathlib import Path
 from agents import function_tool
-from momoka.config import current_work_dir
-
-
-def _resolve_path(path: str) -> Path:
-    """解析路径：相对路径基于会话工作目录，绝对路径直接使用。"""
-    p = Path(path)
-    if p.is_absolute():
-        return p
-    base = current_work_dir.get()
-    if base:
-        return Path(base) / p
-    return p
+from tools.path_utils import resolve_path
 
 
 @function_tool
 def append_file(path: str, content: str) -> str:
-    """向指定文本文件追加内容（不覆盖原有内容）。参数 path: 文件路径，content: 要追加的内容。"""
-    p = _resolve_path(path)
+    """向会话工作目录内的文本文件追加内容（不覆盖原有内容）。
+    参数 path: 文件的相对路径（基于会话工作目录），content: 要追加的内容。"""
+    try:
+        p = resolve_path(path)
+    except ValueError as e:
+        return f"错误：{e}"
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         existed = p.exists()

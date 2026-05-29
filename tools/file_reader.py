@@ -1,23 +1,14 @@
-from pathlib import Path
 from agents import function_tool
-from momoka.config import current_work_dir
-
-
-def _resolve_path(path: str) -> Path:
-    """解析路径：相对路径基于会话工作目录，绝对路径直接使用。"""
-    p = Path(path)
-    if p.is_absolute():
-        return p
-    base = current_work_dir.get()
-    if base:
-        return Path(base) / p
-    return p
+from tools.path_utils import resolve_path
 
 
 @function_tool
 def read_file(path: str) -> str:
-    """读取指定文本文件的内容。参数 path: 文件路径（相对于工作目录或绝对路径）。"""
-    p = _resolve_path(path)
+    """读取会话工作目录内的文本文件。参数 path: 文件的相对路径（基于会话工作目录）。"""
+    try:
+        p = resolve_path(path)
+    except ValueError as e:
+        return f"错误：{e}"
     if not p.exists():
         return f"错误：文件 '{path}' 不存在。"
     if p.is_dir():

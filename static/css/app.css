@@ -180,6 +180,7 @@
     margin-top: 6px;
     padding: 4px 0;
     font-size: 11px;
+    flex-wrap: wrap;
 }
 
 .judge-label {
@@ -237,6 +238,91 @@
 .judge-feedback.score-3 { color: var(--grid-orange); }
 .judge-feedback.score-4 { color: var(--grid-muted); }
 .judge-feedback.score-5, .judge-feedback.score-6, .judge-feedback.score-7 { color: #2e7d32; }
+
+.judge-comment {
+    width: 132px;
+    min-width: 92px;
+    height: 22px;
+    box-sizing: border-box;
+    border: 1px solid var(--grid-line-soft);
+    background: #fff;
+    color: var(--grid-text);
+    font-family: inherit;
+    font-size: 10px;
+    line-height: 20px;
+    padding: 0 6px;
+    outline: none;
+}
+
+.judge-comment:focus {
+    border-color: var(--momoka-accent);
+    box-shadow: 0 0 0 2px rgba(51,153,204,0.12);
+}
+
+.judge-send-btn {
+    height: 22px;
+    border: 1px solid var(--momoka-accent);
+    background: var(--momoka-accent);
+    color: #fff;
+    font-size: 10px;
+    cursor: pointer;
+    border-radius: 0;
+    padding: 0 10px;
+    line-height: 20px;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.judge-send-btn:hover {
+    background: #1177aa;
+    border-color: #1177aa;
+    transform: translateY(-1px);
+}
+
+.judge-send-btn:active {
+    transform: translateY(0);
+}
+
+.selection-judge-popover {
+    position: absolute;
+    z-index: 1500;
+    display: none;
+    width: 218px;
+    padding: 6px;
+    border: 1px solid var(--grid-line);
+    background: linear-gradient(#fff, #f1f7fb);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+    font-size: 11px;
+}
+
+.selection-judge-popover.visible {
+    display: block;
+}
+
+.selection-score-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.selection-input-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 5px;
+}
+
+.selection-comment {
+    flex: 1;
+    min-width: 0;
+}
+
+.selection-judge-popover .judge-feedback {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+    max-width: 100%;
+}
 
 /* ===== 技能标签 ===== */
 .skill-tag {
@@ -722,6 +808,140 @@
 .toast-error.show {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
+}
+
+/* ===== 目录浏览器 ===== */
+
+.dir-browser-dialog {
+    width: min(600px, calc(100% - 32px));
+    max-height: 85vh;
+}
+
+.dir-browser-body {
+    padding: 8px 0;
+    min-height: 200px;
+    max-height: 55vh;
+}
+
+.dir-breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--grid-line);
+    background: #fafafa;
+    font-size: 13px;
+    min-height: 32px;
+}
+
+.crumb-item {
+    padding: 2px 6px;
+    color: #555;
+    white-space: nowrap;
+}
+
+.crumb-link {
+    color: var(--momoka-accent, #39c);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.crumb-link:hover {
+    text-decoration: underline;
+    background: #eef6fb;
+}
+
+.crumb-current {
+    font-weight: bold;
+    color: #222;
+}
+
+.crumb-sep {
+    color: #aaa;
+    font-size: 12px;
+}
+
+.dir-list {
+    overflow-y: auto;
+    max-height: 40vh;
+    padding: 4px 0;
+}
+
+.dir-loading {
+    text-align: center;
+    padding: 32px 16px;
+    color: #999;
+}
+
+.dir-empty {
+    text-align: center;
+    padding: 32px 16px;
+    color: #aaa;
+    font-style: italic;
+}
+
+.dir-error {
+    text-align: center;
+    padding: 32px 16px;
+    color: #c33;
+    background: #fee;
+}
+
+.dir-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    cursor: pointer;
+    transition: background 0.1s;
+    user-select: none;
+}
+
+.dir-item:hover {
+    background: #eef6fb;
+}
+
+.dir-item.selected {
+    background: #cce5ff;
+    font-weight: bold;
+}
+
+.dir-item-up {
+    color: #888;
+    font-size: 13px;
+    border-bottom: 1px solid var(--grid-line);
+    margin-bottom: 4px;
+}
+
+.dir-item-up:hover {
+    background: #f5f5f5;
+    color: #555;
+}
+
+.dir-item-icon {
+    font-size: 16px;
+    width: 24px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.dir-item-name {
+    font-size: 14px;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dir-selected {
+    font-size: 13px;
+    color: #666;
+    padding: 4px 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ===== 通用动画 ===== */

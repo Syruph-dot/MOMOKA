@@ -33,7 +33,7 @@ from tools.file_writer import write_file
 from tools.file_lister import list_files
 from tools.file_appender import append_file
 
-from momoka.config import PROMPTS_DIR, SKILLS_DIR, MEMORY_DIR, LIKERT_LABELS
+from momoka.config import PROMPTS_DIR, SKILLS_DIR, MEMORY_DIR, LIKERT_LABELS, current_work_dir
 from momoka.skill_loader import SkillLoader, format_skill_prompt
 from momoka.memory import MemoryStore
 
@@ -47,6 +47,7 @@ def build_system_prompt(
     topic: str = "",
     matched_skills: list[dict] | None = None,
     feedback_boosts: dict[str, float] | None = None,
+    work_dir: str | None = None,
 ) -> str:
     """构建完整的 system prompt = 基础 prompt + 匹配技能 + 相关记忆。"""
     parts = []
@@ -57,6 +58,14 @@ def build_system_prompt(
         parts.append(prompt_path.read_text(encoding="utf-8"))
     else:
         parts.append("你是 MOMOKA 文件助手 Agent。")
+
+    # 1.5 当前工作目录（注入让 Agent 知道自己被限制在此目录下）
+    if work_dir:
+        parts.append(
+            f"\n## 当前工作目录\n"
+            f"你被限制在以下目录中操作：{work_dir}\n"
+            f"文件操作请使用相对于此目录的路径，不要使用绝对路径。\n"
+        )
 
     # 2. 匹配的技能 (Memento-Skills 范式: Read 阶段)
     if user_message:
@@ -88,9 +97,12 @@ def build_system_prompt(
             text = r.get("context", "")
             score = r.get("score", 0)
             feeling = LIKERT_LABELS.get(score, "未知")
+            comment = (r.get("comment") or "").strip()
+            comment_line = f"\n<UserComment>{comment}</UserComment>" if comment else ""
             feedback_lines.append(
                 f"\n<AnnotateText>{{{text}}}</AnnotateText>"
                 f"\n<UserScore>score:{score}, feeling:{feeling}</UserScore>"
+                f"{comment_line}"
             )
         parts.append("\n".join(feedback_lines))
 
@@ -102,6 +114,7 @@ def create_agent(
     topic: str = "",
     matched_skills: list[dict] | None = None,
     feedback_boosts: dict[str, float] | None = None,
+    work_dir: str | None = None,
 ) -> Agent:
     """创建 MOMOKA Agent 实例，注入技能和记忆。"""
     return Agent(
@@ -111,6 +124,7 @@ def create_agent(
             topic=topic,
             matched_skills=matched_skills,
             feedback_boosts=feedback_boosts,
+            work_dir=work_dir,
         ),
         model=os.environ["MOMOKA_MODEL"],
         tools=[
@@ -128,22 +142,30 @@ def log_tool_calls(result):
     if not hasattr(result, "new_items"):
         return
     for item in result.new_items:
-        if hasattr(item, "raw_item"):
+        if item.type == "tool_call_item":
             raw = item.raw_item
-            if hasattr(raw, "type") and raw.type == "function_call":
+            if isinstance(raw, dict):
+                name = raw.get("name", "?")
+                args = raw.get("arguments", "{}")
+            else:
                 name = getattr(raw, "name", "?")
                 args = getattr(raw, "arguments", "{}")
-                print(f"\n  [TOOL] {name}({args})")
-            elif hasattr(raw, "type") and raw.type == "function_call_output":
-                output = getattr(raw, "output", "")
-                preview = str(output)[:200]
-                print(f"  [RESULT] {preview}")
+            print(f"\n  [TOOL] {name}({args})")
+        elif item.type == "tool_call_output_item":
+            output = item.output if hasattr(item, "output") else str(item.raw_item)
+            preview = str(output)[:200]
+            print(f"  [RESULT] {preview}")
 
 
 def run_cli():
     """命令行交互模式。"""
+    # CLI 模式下将当前目录设为会话工作目录（限制文件操作范围）
+    cli_work_dir = str(Path.cwd().resolve())
+    current_work_dir.set(cli_work_dir)
+
     print("MOMOKA 文件助手已就绪 (输入 /quit 退出)")
     print(f"  已加载 {len(skill_loader.list_skills())} 个技能")
+    print(f"  工作目录: {cli_work_dir}")
     print("-" * 50)
 
     while True:
@@ -159,7 +181,7 @@ def run_cli():
             print("再见。")
             break
 
-        agent = create_agent(user_input)
+        agent = create_agent(user_input, work_dir=cli_work_dir)
 
         with trace("MOMOKA Agent"):
             result = Runner.run_sync(agent, user_input)

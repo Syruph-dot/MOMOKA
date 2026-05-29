@@ -105,23 +105,163 @@ async function createSession() {
     }
 }
 
-// ── 文件夹选择 ──
-async function selectFolder() {
+// ── 文件夹选择（服务端目录浏览器） ──
+
+let dirBrowserCurrent = '';     // 当前浏览路径
+let dirBrowserSelected = '';    // 最终选中路径
+
+function selectFolder() {
+    dirBrowserCurrent = '';
+    dirBrowserSelected = '';
+    document.getElementById('selectDirBtn').disabled = true;
+    document.getElementById('dirSelected').textContent = '未选择';
+    document.getElementById('dirBrowserModal').classList.add('open');
+    loadDirList('');
+}
+
+function hideDirBrowser() {
+    document.getElementById('dirBrowserModal').classList.remove('open');
+}
+
+async function loadDirList(path) {
+    const listEl = document.getElementById('dirList');
+    const breadcrumbEl = document.getElementById('dirBreadcrumb');
+    listEl.innerHTML = '<div class="dir-loading">加载中...</div>';
+
     try {
-        // 使用 File System Access API（Chrome 86+）
-        const dirHandle = await window.showDirectoryPicker();
-        const path = dirHandle.name;
-        // 只能拿到名字，需要用户输入完整路径或浏览器提供 full path
-        // 这里我们在输入框中显示「已选择: 目录名」，让用户确认完整路径
-        document.getElementById('folderInput').value = path;
-        // 实际我们无法从 showDirectoryPicker 获取完整系统路径
-        // 因此保留用户手动输入或粘贴路径的方式
-    } catch (err) {
-        if (err.name !== 'AbortError' && err.name !== 'SecurityError') {
-            console.warn('目录选择器不可用，请手动输入路径:', err);
+        const url = path ? `/api/directories?path=${encodeURIComponent(path)}` : '/api/directories';
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            const err = await resp.json();
+            listEl.innerHTML = `<div class="dir-error">错误: ${err.error || resp.statusText}</div>`;
+            return;
         }
+        const data = await resp.json();
+
+        dirBrowserCurrent = data.path || '';
+        renderBreadcrumb(breadcrumbEl, data);
+        renderDirList(listEl, data);
+    } catch (err) {
+        listEl.innerHTML = `<div class="dir-error">加载失败: ${err.message}</div>`;
     }
 }
+
+function renderBreadcrumb(el, data) {
+    const path = data.path || '';
+    if (!path) {
+        el.innerHTML = '<span class="crumb-item crumb-root">我的电脑</span>';
+        return;
+    }
+
+    const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+
+    let crumbs = '';
+    let pathSoFar = '';
+    for (let i = 0; i < parts.length; i++) {
+        if (i === 0 && parts[i].endsWith(':')) {
+            pathSoFar = parts[i] + '\\';
+        } else {
+            pathSoFar += (i === 0 ? '' : '/') + parts[i];
+        }
+        const isLast = i === parts.length - 1;
+        const label = parts[i];
+        if (isLast) {
+            crumbs += `<span class="crumb-item crumb-current">${escapeHtml(label)}</span>`;
+        } else {
+            crumbs += `<span class="crumb-item crumb-link" data-nav="${escapeHtml(pathSoFar)}">${escapeHtml(label)}</span>`;
+            crumbs += `<span class="crumb-sep">/</span>`;
+        }
+    }
+    // 在 Windows 下，第一个面包屑前加"我的电脑"入口
+    if (path.includes(':')) {
+        crumbs = `<span class="crumb-item crumb-link" data-nav="">我的电脑</span><span class="crumb-sep">/</span>` + crumbs;
+    } else if (data.parent) {
+        crumbs = `<span class="crumb-item crumb-link" data-nav="${escapeHtml(data.parent)}">⬆ ..</span><span class="crumb-sep">/</span>` + crumbs;
+    }
+    el.innerHTML = crumbs;
+}
+
+function renderDirList(el, data) {
+    if (!data || !data.entries || !data.entries.length) {
+        el.innerHTML = '<div class="dir-empty">（空目录）</div>';
+        return;
+    }
+
+    let html = '';
+    // 如果有父级，添加上一级导航
+    if (data.parent) {
+        html += `<div class="dir-item dir-item-up" data-nav="${escapeHtml(data.parent)}">⬆ ..</div>`;
+    } else if (data.path) {
+        // 当前有路径但没有父级 → 回到驱动器列表
+        html += `<div class="dir-item dir-item-up" data-nav="">⬆ 我的电脑</div>`;
+    }
+
+    for (const entry of data.entries) {
+        if (!entry.is_dir) continue; // 只显示目录
+        const icon = entry.name.endsWith(':') ? '💾' : '📁';
+        html += `<div class="dir-item dir-item-folder" data-path="${escapeHtml(entry.path)}">
+            <span class="dir-item-icon">${icon}</span>
+            <span class="dir-item-name">${escapeHtml(entry.name)}</span>
+        </div>`;
+    }
+
+    if (html === '') {
+        html = '<div class="dir-empty">（无子目录）</div>';
+    }
+
+    el.innerHTML = html;
+}
+
+function confirmDirSelection() {
+    if (!dirBrowserSelected) return;
+    document.getElementById('folderInput').value = dirBrowserSelected;
+    hideDirBrowser();
+}
+
+// 目录浏览器事件委托（处理导航、选择）
+document.addEventListener('click', function(e) {
+    // 关闭目录浏览器弹窗（点击遮罩）
+    const browserModal = document.getElementById('dirBrowserModal');
+    if (e.target === browserModal) {
+        hideDirBrowser();
+        return;
+    }
+
+    // 面包屑导航 / 上级目录导航
+    const navItem = e.target.closest('[data-nav]');
+    if (navItem) {
+        const path = navItem.dataset.nav;
+        loadDirList(path);
+        return;
+    }
+
+    // 选择目录
+    const folderItem = e.target.closest('.dir-item-folder');
+    if (folderItem && folderItem.dataset.path) {
+        const path = folderItem.dataset.path;
+
+        // 高亮选中的目录
+        document.querySelectorAll('.dir-item-folder.selected').forEach(el => el.classList.remove('selected'));
+        folderItem.classList.add('selected');
+
+        // 更新选中状态
+        dirBrowserSelected = path;
+        document.getElementById('dirSelected').textContent = `已选: ${path}`;
+        document.getElementById('selectDirBtn').disabled = false;
+        return;
+    }
+
+    // 双击目录进入（使用单击 + 延迟判断，但这里不实现双击以避免干扰单击选择）
+    // 双击由用户在目录上快速双击，通过单独的 dblclick 处理
+});
+
+// 双击进入目录
+document.addEventListener('dblclick', function(e) {
+    const folderItem = e.target.closest('.dir-item-folder');
+    if (folderItem && folderItem.dataset.path) {
+        loadDirList(folderItem.dataset.path);
+    }
+});
 
 // 回车快捷创建
 function onGoalKeydown(e) {

@@ -87,6 +87,7 @@ class ServerFeedbackApiTests(unittest.TestCase):
                         "output_id": "out_api_1",
                         "score": 7,
                         "context": "",
+                        "comment": "继续深化这个方向",
                         "continue": True,
                     },
                 )
@@ -94,6 +95,8 @@ class ServerFeedbackApiTests(unittest.TestCase):
                 self.assertEqual(judge_res.status_code, 200)
                 data = judge_res.json()
                 self.assertEqual(data["annotated_text"], "第一轮输出")
+                self.assertEqual(data["comment"], "继续深化这个方向")
+                self.assertIn("继续深化这个方向", data["analysis"])
                 self.assertEqual(data["reflection"]["next_guess_strategy"], "deepen")
                 self.assertEqual(data["next_response"], "下一轮主动猜测")
                 self.assertTrue(data["next_output_id"].startswith("out_"))

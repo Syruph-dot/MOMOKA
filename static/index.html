@@ -125,5 +125,28 @@
             </div>
         </div>
     </div>
+
+    <!-- 目录浏览器弹窗 -->
+    <div id="dirBrowserModal" class="modal-overlay">
+        <div class="modal-dialog dir-browser-dialog">
+            <div class="modal-header">
+                <h3>选择工作文件夹</h3>
+                <button class="modal-close" onclick="hideDirBrowser()">✕</button>
+            </div>
+            <div class="modal-body dir-browser-body">
+                <div class="dir-breadcrumb" id="dirBreadcrumb"></div>
+                <div class="dir-list" id="dirList">
+                    <div class="dir-loading">加载中...</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="dir-selected" id="dirSelected">未选择</div>
+                <div>
+                    <button class="form-btn form-btn-cancel" onclick="hideDirBrowser()">取消</button>
+                    <button id="selectDirBtn" class="form-btn form-btn-primary" onclick="confirmDirSelection()" disabled>选择此文件夹</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

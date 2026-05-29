@@ -46,6 +46,21 @@ class FeedbackLoopTests(unittest.TestCase):
             self.assertEqual(judgment["context"], "低成本反馈")
             self.assertEqual(judgment["context_source"], "selected_text")
 
+    def test_optional_comment_is_preserved_with_judgment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            store.record_output(
+                output_id="out_comment",
+                prompt="继续猜",
+                response="用户真正关心的是低成本反馈。",
+                topic="批注式判断",
+            )
+
+            judgment = store.record_judgment("out_comment", 6, "低成本反馈", "这里方向对")
+
+            self.assertEqual(judgment["comment"], "这里方向对")
+            self.assertEqual(judgment["comment_source"], "user_comment")
+
     def test_structured_reflection_maps_scores_to_next_guess_strategy(self):
         low = analyze_judgment(2, LIKERT_LABELS[2], "过度强调工具", "Agent 主题")
         neutral = analyze_judgment(4, LIKERT_LABELS[4], "自我进化", "Agent 主题")
@@ -87,6 +102,30 @@ class FeedbackLoopTests(unittest.TestCase):
         self.assertIn("上一轮 Agent 输出", prompt)
         self.assertIn("用户划选了输出里关于零文本输入的部分", prompt)
         self.assertIn(reflection["next_guess_instruction"], prompt)
+
+    def test_followup_prompt_includes_optional_comment(self):
+        reflection = analyze_judgment(
+            6,
+            LIKERT_LABELS[6],
+            "选中的判断",
+            "MOMOKA 批注协议",
+            "这个判断标准正确",
+        )
+
+        prompt = build_followup_prompt(
+            topic="MOMOKA 批注协议",
+            output_text="上一轮 Agent 输出",
+            judgment={
+                "score": 6,
+                "label": LIKERT_LABELS[6],
+                "context": "选中的判断",
+                "comment": "这个判断标准正确",
+            },
+            reflection=reflection,
+        )
+
+        self.assertIn("文字批注: 这个判断标准正确", prompt)
+        self.assertIn("用户明确补充的判断标准", reflection["intent_hypothesis"])
 
 
 if __name__ == "__main__":

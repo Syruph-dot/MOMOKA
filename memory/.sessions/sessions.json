@@ -1,11 +1,20 @@
 [
   {
+    "id": "ses_d1f3bbc94891",
+    "name": "写一篇短篇小说",
+    "goal": "写一篇短篇小说",
+    "folder_path": "D:\\ARONA\\Momoka\\testnovel",
+    "created_at": "2026-05-29T21:28:38.651456",
+    "message_count": 2,
+    "last_message_at": "2026-05-29T21:29:09.093363"
+  },
+  {
     "id": "ses_4ff97e56b139",
     "name": "生成一些好玩的项目",
     "goal": "生成一些好玩的项目",
     "folder_path": "D:\\ARONA\\Momoka\\test",
     "created_at": "2026-05-29T20:06:51.410774",
-    "message_count": 2,
-    "last_message_at": "2026-05-29T20:07:22.651863"
+    "message_count": 8,
+    "last_message_at": "2026-05-29T21:15:09.594726"
   }
 ]

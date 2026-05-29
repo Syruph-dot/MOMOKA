@@ -109,6 +109,7 @@ class MemoryStore:
         topic: str = "",
         matched_skills: list[str] | None = None,
         tool_calls: list[dict] | None = None,
+        session_id: str | None = None,
     ) -> dict:
         """Record a full Agent output so later judgments can cite it."""
         record = {
@@ -118,6 +119,7 @@ class MemoryStore:
             "response": response,
             "matched_skills": matched_skills or [],
             "tool_calls": tool_calls or [],
+            "session_id": session_id,
             "timestamp": datetime.now().isoformat(),
         }
         path = self.outputs_path()
@@ -134,10 +136,11 @@ class MemoryStore:
         return None
 
     # -- 判断记录 ---
-    def record_judgment(self, output_id: str, score: int, context: str = ""):
+    def record_judgment(self, output_id: str, score: int, context: str = "", comment: str = ""):
         """记录用户的一次批注判断。"""
         output = self.get_output(output_id) or {}
         selected = context.strip()
+        note = comment.strip()
         full_output = str(output.get("response", "")).strip()
         resolved_context = selected or full_output
         record = {
@@ -145,6 +148,8 @@ class MemoryStore:
             "score": score,
             "context": resolved_context[:2000],
             "context_source": "selected_text" if selected else "full_output",
+            "comment": note[:1000],
+            "comment_source": "user_comment" if note else "none",
             "topic": output.get("topic", ""),
             "matched_skills": output.get("matched_skills", []),
             "timestamp": datetime.now().isoformat(),
@@ -217,6 +222,7 @@ class MemoryStore:
             "output_id": judgment.get("output_id", ""),
             "score": score,
             "context": judgment.get("context", "")[:200],
+            "comment": judgment.get("comment", "")[:200],
             "timestamp": datetime.now().isoformat(),
         }
         if any(ev.get("output_id") == evidence["output_id"] for ev in candidate.get("evidence", [])):
@@ -247,8 +253,10 @@ class MemoryStore:
     def _write_preference_to_long_term(self, pref: dict):
         evidence_lines = []
         for ev in pref.get("evidence", []):
+            comment = ev.get("comment", "")
+            comment_suffix = f" | comment:{comment}" if comment else ""
             evidence_lines.append(
-                f"- {ev.get('timestamp', '')} | {ev.get('output_id', '')} | score:{ev.get('score', '')} | {ev.get('context', '')}"
+                f"- {ev.get('timestamp', '')} | {ev.get('output_id', '')} | score:{ev.get('score', '')} | {ev.get('context', '')}{comment_suffix}"
             )
 
         content = "\n".join([
@@ -336,8 +344,10 @@ class MemoryStore:
             "**证据**:",
         ]
         for ev in proposal.get("evidence", []):
+            comment = ev.get("comment", "")
+            comment_suffix = f" | comment:{comment}" if comment else ""
             md_lines.append(
-                f"- {ev.get('timestamp', '')} | {ev.get('output_id', '')} | score:{ev.get('score', '')} | {ev.get('context', '')}"
+                f"- {ev.get('timestamp', '')} | {ev.get('output_id', '')} | score:{ev.get('score', '')} | {ev.get('context', '')}{comment_suffix}"
             )
         md_lines.append(f"**预期变更**: {proposal.get('expected_diff', '')}")
         md_lines.append(f"**应用约束**: {proposal.get('apply_guardrails', '')}")

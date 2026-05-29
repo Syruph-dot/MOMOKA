@@ -7,6 +7,11 @@ let session = null;
 let lastOutputId = '';
 let isProcessing = false;
 let loadedMessageIds = new Set();
+let selectionJudge = {
+    outputId: '',
+    text: '',
+    bubble: null,
+};
 
 // ── 初始化 ──
 document.addEventListener('DOMContentLoaded', initChat);
@@ -55,7 +60,7 @@ async function loadMessages() {
             if (msg.role === 'user') {
                 addMessage('user', msg.content, msg.id, false);
             } else {
-                addMessage('agent', msg.content, msg.output_id || msg.id, false, msg.matched_skills, msg.tool_calls);
+                addMessage('agent', msg.content, msg.output_id || msg.id, Boolean(msg.output_id), msg.matched_skills, msg.tool_calls);
             }
         }
         scrollToBottom();
@@ -211,45 +216,178 @@ function renderJudgeBar(outputId) {
     let html = `<div class="judge-bar" data-output-id="${outputId}">`;
     html += '<span class="judge-label">评分:</span>';
     for (const l of labels) {
-        html += `<button class="judge-btn ${l.cls || ''}" onclick="sendJudge('${outputId}',${l.score})" title="${l.title}">${l.score}</button>`;
+        html += `<button class="judge-btn ${l.cls || ''}" onclick="selectJudgeScore(this,'${outputId}')" title="${l.title}">${l.score}</button>`;
     }
+    html += `<input class="judge-comment" id="comment-${outputId}" type="text" maxlength="500" placeholder="批注(选填)" aria-label="文字批注">`;
+    html += `<button class="judge-send-btn" onclick="sendJudgeByBar('${outputId}')" title="提交评分与批注">发送</button>`;
     html += `<span class="judge-feedback" id="feedback-${outputId}"></span>`;
     html += '</div>';
     return html;
 }
 
+function selectJudgeScore(btn, outputId) {
+    const bar = btn.closest('.judge-bar');
+    if (!bar) return;
+    bar.querySelectorAll('.judge-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+}
+
+function sendJudgeByBar(outputId) {
+    const bar = document.querySelector(`.judge-bar[data-output-id="${outputId}"]`);
+    if (!bar) return;
+    const activeBtn = bar.querySelector('.judge-btn.active');
+    if (!activeBtn) {
+        const fb = document.getElementById(`feedback-${outputId}`);
+        if (fb) {
+            fb.textContent = '请先选择一个评分';
+            fb.className = 'judge-feedback score-3';
+        }
+        return;
+    }
+    const score = parseInt(activeBtn.textContent);
+    sendJudge(outputId, score, 'block');
+}
+
+function ensureSelectionJudgeBar() {
+    let popover = document.getElementById('selectionJudgeBar');
+    if (popover) return popover;
+
+    popover = document.createElement('div');
+    popover.id = 'selectionJudgeBar';
+    popover.className = 'selection-judge-popover';
+    popover.innerHTML = `
+        <div class="selection-score-row">
+            <span class="judge-label">评分:</span>
+            <button class="judge-btn" data-score="1" title="强烈反对">1</button>
+            <button class="judge-btn" data-score="2" title="反对">2</button>
+            <button class="judge-btn" data-score="3" title="不太赞同">3</button>
+            <button class="judge-btn neutral" data-score="4" title="中立">4</button>
+            <button class="judge-btn" data-score="5" title="有点赞同">5</button>
+            <button class="judge-btn" data-score="6" title="赞同">6</button>
+            <button class="judge-btn" data-score="7" title="强烈赞同">7</button>
+        </div>
+        <div class="selection-input-row">
+            <input class="judge-comment selection-comment" id="selectionJudgeComment" type="text" maxlength="500" placeholder="批注(选填)" aria-label="选中文字批注">
+            <button class="judge-send-btn selection-send-btn" title="追加此条划词评分与批注">设置</button>
+        </div>
+        <span class="judge-feedback" id="selectionJudgeFeedback"></span>
+    `;
+
+    popover.addEventListener('click', function(e) {
+        const btn = e.target.closest('.judge-btn[data-score]');
+        if (!btn) return;
+        popover.querySelectorAll('.judge-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+    });
+
+    // 选区发送按钮单独处理
+    popover.addEventListener('click', function(e) {
+        const sendBtn = e.target.closest('.selection-send-btn');
+        if (!sendBtn) return;
+        const activeBtn = popover.querySelector('.judge-btn.active');
+        if (!activeBtn) {
+            const fb = document.getElementById('selectionJudgeFeedback');
+            if (fb) { fb.textContent = '请先选择一个评分'; fb.className = 'judge-feedback score-3'; }
+            return;
+        }
+        const score = Number(activeBtn.dataset.score);
+        sendJudge(selectionJudge.outputId, score, 'selection');
+    });
+
+    document.body.appendChild(popover);
+    return popover;
+}
+
+function hideSelectionJudgeBar() {
+    const popover = document.getElementById('selectionJudgeBar');
+    if (popover) popover.classList.remove('visible');
+}
+
+function showSelectionJudgeBar(rect, bubble, selectedText) {
+    const message = bubble.closest('.chat-message');
+    const outputId = message ? message.getAttribute('data-msg-id') : '';
+    if (!outputId || !message.querySelector('.judge-bar')) {
+        hideSelectionJudgeBar();
+        return;
+    }
+
+    selectionJudge = {
+        outputId: outputId,
+        text: selectedText,
+        bubble: bubble,
+    };
+
+    const popover = ensureSelectionJudgeBar();
+    const comment = popover.querySelector('#selectionJudgeComment');
+    if (comment) comment.value = '';
+    popover.classList.add('visible');
+
+    const top = Math.max(8, rect.top + window.scrollY - popover.offsetHeight - 8);
+    const center = rect.left + window.scrollX + rect.width / 2;
+    const maxLeft = window.scrollX + document.documentElement.clientWidth - popover.offsetWidth - 8;
+    const left = Math.max(8 + window.scrollX, Math.min(maxLeft, center - popover.offsetWidth / 2));
+    popover.style.top = `${top}px`;
+    popover.style.left = `${left}px`;
+}
+
 // ── 文本划选 ──
 document.addEventListener('mouseup', function(e) {
+    if (e.target.closest('#selectionJudgeBar')) return;
     const bubble = e.target.closest('.chat-message.agent .msg-bubble');
-    if (!bubble) return;
-    const sel = window.getSelection().toString().trim();
-    if (!sel) return;
-    const bar = bubble.closest('.chat-message').querySelector('.judge-bar');
-    if (bar) bar.dataset.selectedText = sel;
+    if (!bubble) {
+        hideSelectionJudgeBar();
+        return;
+    }
+    const selection = window.getSelection();
+    const sel = selection.toString().trim();
+    if (!sel || selection.rangeCount === 0) {
+        hideSelectionJudgeBar();
+        return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!bubble.contains(range.commonAncestorContainer)) {
+        hideSelectionJudgeBar();
+        return;
+    }
+    showSelectionJudgeBar(range.getBoundingClientRect(), bubble, sel);
 });
 
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') hideSelectionJudgeBar();
+});
+
+document.addEventListener('scroll', hideSelectionJudgeBar, true);
+
 // ── 评分 ──
-async function sendJudge(outputId, score) {
+async function sendJudge(outputId, score, scope) {
     if (isProcessing) return;
 
     const bar = document.querySelector(`.judge-bar[data-output-id="${outputId}"]`);
-    if (!bar) return;
+    const isSelection = scope === 'selection';
+    if (!bar && !isSelection) return;
 
     isProcessing = true;
-    const btns = bar.querySelectorAll('.judge-btn');
-    btns.forEach(b => b.classList.remove('active'));
-    const target = bar.querySelector(`.judge-btn:nth-child(${score + 1})`);
-    if (target) target.classList.add('active');
+    let selectedText = '';
+    let comment = '';
+    if (isSelection) {
+        selectedText = selectionJudge.outputId === outputId ? selectionJudge.text : '';
+        const selectionComment = document.getElementById('selectionJudgeComment');
+        comment = selectionComment ? selectionComment.value.trim() : '';
+    } else {
+        // 评分按钮的 active 状态已由 selectJudgeScore 设置，此处不再重置
+        const commentInput = document.getElementById(`comment-${outputId}`);
+        comment = commentInput ? commentInput.value.trim() : '';
+    }
 
-    const selectedText = bar.dataset.selectedText || '';
     const labelMap = {1:'强烈反对',2:'反对',3:'不太赞同',4:'中立',5:'有点赞同',6:'赞同',7:'强烈赞同'};
     const label = labelMap[score] || '未知';
-    const annotation = `<AnnotateText>{${selectedText}}</AnnotateText>\n<UserScore>score:${score}, feeling:${label}</UserScore>`;
+    const annotation = `<AnnotateText>{${selectedText}}</AnnotateText>\n<UserScore>score:${score}, feeling:${label}</UserScore>\n<UserComment>${comment}</UserComment>`;
     console.log(`[MOMOKA] 标注格式:\n${annotation}`);
 
+    const shouldContinue = !isSelection; // 划词只 append，块级评分才续猜
     let hadError = false;
     try {
-        setStatus('thinking', '续猜中...');
+        if (shouldContinue) setStatus('thinking', '续猜中...');
         const res = await fetch(`${API_BASE}/judge`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -257,7 +395,8 @@ async function sendJudge(outputId, score) {
                 output_id: outputId,
                 score: score,
                 context: selectedText,
-                continue: true,
+                comment: comment,
+                continue: shouldContinue,
             }),
         });
 
@@ -273,9 +412,10 @@ async function sendJudge(outputId, score) {
         }
 
         if (fb) {
-            fb.textContent = data.analysis;
+            fb.textContent = isSelection ? `选区 ${score}/7: ${data.analysis}` : data.analysis;
             fb.className = `judge-feedback score-${score}`;
         }
+        if (isSelection) hideSelectionJudgeBar();
 
         console.log(`[MOMOKA] 评分: ${score}/7 — ${data.label} — ${data.analysis}`);
 

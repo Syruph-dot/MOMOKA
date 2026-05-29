@@ -58,27 +58,30 @@ def extract_tool_calls(result) -> list[dict]:
 
     current_call = None
     for item in result.new_items:
-        if not hasattr(item, "raw_item"):
-            continue
-        raw = item.raw_item
-
-        if hasattr(raw, "type") and raw.type == "function_call":
+        if item.type == "tool_call_item":
+            raw = item.raw_item
+            if isinstance(raw, dict):
+                name = raw.get("name", "unknown")
+                args = raw.get("arguments", "{}")
+            else:
+                name = getattr(raw, "name", "unknown")
+                args = getattr(raw, "arguments", "{}")
             current_call = {
-                "tool": getattr(raw, "name", "unknown"),
-                "args": getattr(raw, "arguments", "{}"),
+                "tool": name,
+                "args": args,
                 "result": "",
             }
-        elif hasattr(raw, "type") and raw.type == "function_call_output":
-            output = str(getattr(raw, "output", ""))
+        elif item.type == "tool_call_output_item":
+            output = item.output if hasattr(item, "output") else str(item.raw_item)
             if current_call:
-                current_call["result"] = output[:500]
+                current_call["result"] = str(output)[:500]
                 tool_calls.append(current_call)
                 current_call = None
             else:
                 tool_calls.append({
                     "tool": "unknown",
                     "args": "{}",
-                    "result": output[:500],
+                    "result": str(output)[:500],
                 })
 
     return tool_calls
@@ -194,6 +197,7 @@ async def api_chat(request: Request) -> JSONResponse:
         topic=topic,
         matched_skills=matched,
         feedback_boosts=feedback_boosts,
+        work_dir=work_dir,
     )
 
     try:
@@ -226,6 +230,7 @@ async def api_chat(request: Request) -> JSONResponse:
         topic=topic,
         matched_skills=matched_names,
         tool_calls=tool_calls,
+        session_id=session_id,
     )
 
     # 如果绑定会话，保存 Agent 回复
@@ -260,6 +265,7 @@ async def api_judge(request: Request) -> JSONResponse:
     output_id = body.get("output_id", "")
     score = body.get("score", 0)
     context = body.get("context", "")
+    comment = body.get("comment", "")
     should_continue = bool(body.get("continue", False))
 
     if not isinstance(score, int) or score < 1 or score > 7:
@@ -267,6 +273,10 @@ async def api_judge(request: Request) -> JSONResponse:
             "error": "评分必须是 1-7 的整数",
             "valid_range": {str(k): v for k, v in LIKERT_LABELS.items()},
         }, status_code=400)
+    if not isinstance(context, str):
+        return JSONResponse({"error": "批注上下文必须是字符串"}, status_code=400)
+    if not isinstance(comment, str):
+        return JSONResponse({"error": "文字批注必须是字符串"}, status_code=400)
 
     label = LIKERT_LABELS.get(score, "未知")
     output = memory_store.get_output(output_id)
@@ -276,8 +286,9 @@ async def api_judge(request: Request) -> JSONResponse:
         }, status_code=404)
 
     # 记录判断到短期召回存储
-    judgment = memory_store.record_judgment(output_id, score, context)
+    judgment = memory_store.record_judgment(output_id, score, context, comment)
     annotated_text = judgment.get("context", "")
+    user_comment = judgment.get("comment", "")
 
     # 判断分析 (MOMOKA_PRD: Reflect 阶段)
     reflection = analyze_judgment(
@@ -285,6 +296,7 @@ async def api_judge(request: Request) -> JSONResponse:
         label=label,
         annotated_text=annotated_text,
         topic=judgment.get("topic", ""),
+        user_comment=user_comment,
     )
     analysis = reflection["summary"]
 
@@ -298,6 +310,7 @@ async def api_judge(request: Request) -> JSONResponse:
             f"**分析**: {analysis}",
             f"**策略**: {reflection['next_guess_strategy']}",
             f"**上下文**: {annotated_text[:200]}",
+            f"**文字批注**: {user_comment[:200] or '无'}",
         ])
     )
 
@@ -307,6 +320,7 @@ async def api_judge(request: Request) -> JSONResponse:
         "analysis": analysis,
         "reflection": reflection,
         "annotated_text": annotated_text[:2000],
+        "comment": user_comment[:1000],
         "preference_update": preference_update,
         "evolution_proposals": evolution_proposals,
     }
@@ -334,11 +348,21 @@ async def api_judge(request: Request) -> JSONResponse:
             }
             for m in next_matched
         ]
+        # 尝试从原输出关联的会话中获取工作目录
+        judge_work_dir = None
+        output_session_id = output.get("session_id")
+        if output_session_id:
+            output_session = session_manager.get_session(output_session_id)
+            if output_session:
+                judge_work_dir = output_session.get("folder_path") or None
+                if judge_work_dir:
+                    current_work_dir.set(judge_work_dir)
         agent = create_agent(
             followup_prompt,
             topic=followup_topic,
             matched_skills=next_matched,
             feedback_boosts=next_feedback_boosts,
+            work_dir=judge_work_dir,
         )
         try:
             with trace("MOMOKA Score-only Continuation"):
@@ -357,6 +381,7 @@ async def api_judge(request: Request) -> JSONResponse:
             topic=followup_topic,
             matched_skills=[m["meta"]["name"] for m in next_matched],
             tool_calls=tool_calls,
+            session_id=output.get("session_id"),
         )
         memory_store.write_daily(
             f"**MOMOKA续猜**: {result.final_output[:300]}"
@@ -396,6 +421,67 @@ async def api_memory(_request: Request) -> JSONResponse:
         "daily": memory_store.read_daily(7),
         "long_term": memory_store.read_long_term()[:2000],
     })
+
+
+async def api_list_directories(request: Request) -> JSONResponse:
+    """列出指定路径下的子目录（供前端目录选择器使用）。
+    查询参数: path — 要列出的目录路径（空则返回根/驱动器列表）
+    """
+    path_str = request.query_params.get("path", "").strip()
+    current = Path(path_str).resolve() if path_str else None
+
+    # 如果没有指定路径，返回系统根目录（Windows 下返回驱动器列表）
+    if current is None:
+        if os.name == "nt":  # Windows
+            import subprocess
+            result = subprocess.run(["wmic", "logicaldisk", "get", "name"],
+                                    capture_output=True, text=True, timeout=5)
+            drives = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line and line.endswith(":") and line != "Name":
+                    drives.append({"name": line, "path": line + "\\", "is_dir": True})
+            return JSONResponse({
+                "path": "",
+                "parent": None,
+                "entries": drives,
+            })
+        else:
+            return JSONResponse({
+                "path": "",
+                "parent": None,
+                "entries": [{"name": "/", "path": "/", "is_dir": True}],
+            })
+
+    if not current.exists():
+        return JSONResponse({"error": f"路径不存在：{current}"}, status_code=400)
+    if not current.is_dir():
+        return JSONResponse({"error": f"路径不是目录：{current}"}, status_code=400)
+
+    try:
+        entries = []
+        for child in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if child.is_dir():
+                try:
+                    entries.append({
+                        "name": child.name,
+                        "path": str(child.resolve()),
+                        "is_dir": True,
+                    })
+                except (OSError, PermissionError):
+                    pass  # 跳过无权限的目录
+
+        parent = str(current.parent.resolve()) if current.parent != current else None
+
+        return JSONResponse({
+            "path": str(current.resolve()),
+            "parent": parent,
+            "entries": entries,
+        })
+    except PermissionError:
+        return JSONResponse({"error": f"无权限访问：{current}"}, status_code=403)
+    except OSError as e:
+        return JSONResponse({"error": f"读取目录失败：{e}"}, status_code=500)
 
 
 async def api_config(_request: Request) -> JSONResponse:
@@ -451,6 +537,7 @@ routes = [
     Route("/api/judge", api_judge, methods=["POST"]),
     Route("/api/skills", api_skills),
     Route("/api/memory", api_memory),
+    Route("/api/directories", api_list_directories),
 ]
 
 app = Starlette(routes=routes)
