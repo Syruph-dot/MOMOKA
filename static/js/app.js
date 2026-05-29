@@ -6,6 +6,7 @@
 const API_BASE = '/api';
 let isProcessing = false;
 let lastOutputId = '';
+let currentTopic = '';
 
 // --- 工具函数 ---
 function escapeHtml(str) {
@@ -59,7 +60,7 @@ function renderJudgeBar(outputId) {
         { score: 7, cls: '', title: '强烈赞同' },
     ];
 
-    let html = '<div class="judge-bar">';
+    let html = `<div class="judge-bar" data-output-id="${outputId}">`;
     html += '<span class="judge-label">评分:</span>';
     for (const l of labels) {
         html += `<button class="judge-btn ${l.cls}" onclick="sendJudge('${outputId}',${l.score})" title="${l.title}">${l.score}</button>`;
@@ -81,15 +82,18 @@ document.addEventListener('mouseup', function(e) {
 
 // --- 批注判断 (MOMOKA_PRD 核心交互) ---
 async function sendJudge(outputId, score) {
+    if (isProcessing) return;
+
     // 高亮当前评分
     const bar = document.querySelector(`.judge-bar[data-output-id="${outputId}"]`);
     if (!bar) return;
+    isProcessing = true;
     const btns = bar.querySelectorAll('.judge-btn');
     btns.forEach(b => b.classList.remove('active'));
     const target = bar.querySelector(`.judge-btn:nth-child(${score + 1})`);
     if (target) target.classList.add('active');
 
-    // 获取用户划选的文本（若无划选则用空字符串兜底）
+    // 获取用户划选的文本；无划选时让后端用整条输出兜底。
     const selectedText = bar.dataset.selectedText || '';
 
     // 记录标注格式到控制台（可观测性）
@@ -99,7 +103,9 @@ async function sendJudge(outputId, score) {
     console.log(`[MOMOKA] 标注格式:\n${annotation}`);
 
     // 发送评分到后端
+    let hadError = false;
     try {
+        setStatus('thinking', '续猜中...');
         const res = await fetch(`${API_BASE}/judge`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -107,25 +113,57 @@ async function sendJudge(outputId, score) {
                 output_id: outputId,
                 score: score,
                 context: selectedText,
+                continue: true,
             }),
         });
 
-        if (res.ok) {
-            const data = await res.json();
-            const fb = document.getElementById(`feedback-${outputId}`);
-            if (fb) {
-                fb.textContent = data.analysis;
-                fb.className = `judge-feedback score-${score}`;
-            }
+        const data = await res.json();
+        const fb = document.getElementById(`feedback-${outputId}`);
 
-            // 记录到日记忆（轻量版本）
-            console.log(`[MOMOKA] 评分: ${score}/7 — ${data.label} — ${data.analysis}`);
-            if (data.annotated_text) {
-                console.log(`[MOMOKA] 标注文本: "${data.annotated_text}"`);
+        if (!res.ok) {
+            if (fb) {
+                fb.textContent = data.error || '评分提交失败';
+                fb.className = 'judge-feedback score-1';
+            }
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
+        if (fb) {
+            fb.textContent = data.analysis;
+            fb.className = `judge-feedback score-${score}`;
+        }
+
+        // 记录到日记忆（轻量版本）
+        console.log(`[MOMOKA] 评分: ${score}/7 — ${data.label} — ${data.analysis}`);
+        if (data.annotated_text) {
+            console.log(`[MOMOKA] 标注文本: "${data.annotated_text}"`);
+        }
+
+        if (data.next_tool_calls && data.next_tool_calls.length > 0) {
+            for (const tc of data.next_tool_calls) {
+                addToolLog(tc.tool, tc.args, tc.result);
             }
         }
+
+        if (data.next_response) {
+            addMessage('agent', data.next_response, data.next_output_id);
+        }
+
+        if (data.next_skill_reasons) {
+            updateSkillTags(data.next_skill_reasons);
+            const skillInd = document.getElementById('skill-indicator');
+            const names = data.next_skill_reasons.map(s => s.name);
+            skillInd.textContent = names.length > 0
+                ? `技能: ${names.join(', ')}`
+                : '';
+        }
     } catch (err) {
+        hadError = true;
         console.error('评分提交失败:', err);
+        setStatus('error', '错误');
+    } finally {
+        isProcessing = false;
+        if (!hadError) setStatus('idle', '就绪');
     }
 }
 
@@ -163,9 +201,16 @@ function updateSkillTags(skills) {
         container.innerHTML = '<span style="color:#999;font-size:11px">暂无</span>';
         return;
     }
-    container.innerHTML = skills.map(s =>
-        `<span class="skill-tag">${escapeHtml(s)}</span>`
-    ).join('');
+    const normalized = typeof skills[0] === 'string'
+        ? skills.map(name => ({ name, reasons: [] }))
+        : skills;
+    container.innerHTML = normalized.map(s => {
+        const name = s.name || '';
+        const reasons = (s.reasons || []).slice(0, 3).join(' · ');
+        const score = typeof s.score === 'number' ? `score:${s.score}` : '';
+        const title = [reasons, score].filter(Boolean).join(' | ');
+        return `<span class="skill-tag" title="${escapeHtml(title)}">${escapeHtml(name)}</span>`;
+    }).join('');
 }
 
 // --- 发送消息 ---
@@ -175,6 +220,7 @@ async function sendMessage() {
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     if (!message) return;
+    if (!currentTopic) currentTopic = message;
 
     isProcessing = true;
     input.value = '';
@@ -196,7 +242,7 @@ async function sendMessage() {
         const res = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, output_id: outputId }),
+            body: JSON.stringify({ message, output_id: outputId, topic: currentTopic }),
         });
 
         if (!res.ok) {
@@ -207,10 +253,14 @@ async function sendMessage() {
         const data = await res.json();
 
         // 显示匹配的技能
-        if (data.matched_skills) {
-            updateSkillTags(data.matched_skills);
-            skillInd.textContent = data.matched_skills.length > 0
-                ? `技能: ${data.matched_skills.join(', ')}`
+        if (data.matched_skills || data.skill_reasons) {
+            const payload = data.skill_reasons || data.matched_skills;
+            const names = Array.isArray(data.skill_reasons)
+                ? data.skill_reasons.map(s => s.name)
+                : data.matched_skills;
+            updateSkillTags(payload);
+            skillInd.textContent = names && names.length > 0
+                ? `技能: ${names.join(', ')}`
                 : '';
         }
 
@@ -254,4 +304,5 @@ function clearChat() {
     clearToolLogs();
     updateSkillTags([]);
     document.getElementById('skill-indicator').textContent = '';
+    currentTopic = '';
 }

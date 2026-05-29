@@ -6,6 +6,7 @@ MOMOKA HTTP API 服务器
 import json
 import os
 import asyncio
+import uuid
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -19,6 +20,8 @@ from agents import Runner, trace
 
 from file_agent import create_agent, skill_loader, memory_store
 from momoka.config import LIKERT_LABELS
+from momoka.feedback import analyze_judgment, build_followup_prompt
+from momoka.evolution import generate_evolution_proposals
 from momoka.skill_loader import format_skill_prompt
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -88,12 +91,28 @@ async def api_chat(request: Request) -> JSONResponse:
     if not message:
         return JSONResponse({"error": "消息不能为空"}, status_code=400)
 
-    # 创建 Agent（含技能匹配 + 记忆注入）
-    agent = create_agent(message)
+    output_id = body.get("output_id", "").strip() or f"out_{uuid.uuid4().hex[:12]}"
+    topic = body.get("topic", "").strip() or message[:80]
 
-    # 检测匹配的技能
-    matched = skill_loader.match_skills(message)
+    feedback_boosts = memory_store.get_skill_feedback_boosts()
+    matched = skill_loader.match_skills(message, topic=topic, feedback_boosts=feedback_boosts)
     matched_names = [m["meta"]["name"] for m in matched]
+    skill_reasons = [
+        {
+            "name": m["meta"]["name"],
+            "score": round(m.get("score", 0), 3),
+            "reasons": m.get("reasons", []),
+        }
+        for m in matched
+    ]
+
+    # 创建 Agent（含技能匹配 + 记忆注入）
+    agent = create_agent(
+        message,
+        topic=topic,
+        matched_skills=matched,
+        feedback_boosts=feedback_boosts,
+    )
 
     try:
         with trace("MOMOKA API"):
@@ -118,13 +137,22 @@ async def api_chat(request: Request) -> JSONResponse:
         f"**用户**: {message}\n**Agent**: {result.final_output[:300]}"
     )
 
-    output_id = body.get("output_id", "")
+    memory_store.record_output(
+        output_id=output_id,
+        prompt=message,
+        response=result.final_output,
+        topic=topic,
+        matched_skills=matched_names,
+        tool_calls=tool_calls,
+    )
 
     return JSONResponse({
         "output_id": output_id,
+        "topic": topic,
         "response": result.final_output,
         "tool_calls": tool_calls,
         "matched_skills": matched_names,
+        "skill_reasons": skill_reasons,
     })
 
 
@@ -138,6 +166,7 @@ async def api_judge(request: Request) -> JSONResponse:
     output_id = body.get("output_id", "")
     score = body.get("score", 0)
     context = body.get("context", "")
+    should_continue = bool(body.get("continue", False))
 
     if not isinstance(score, int) or score < 1 or score > 7:
         return JSONResponse({
@@ -146,24 +175,106 @@ async def api_judge(request: Request) -> JSONResponse:
         }, status_code=400)
 
     label = LIKERT_LABELS.get(score, "未知")
+    output = memory_store.get_output(output_id)
+    if output is None:
+        return JSONResponse({
+            "error": f"未知 output_id: {output_id}",
+        }, status_code=404)
 
     # 记录判断到短期召回存储
-    memory_store.record_judgment(output_id, score, context)
+    judgment = memory_store.record_judgment(output_id, score, context)
+    annotated_text = judgment.get("context", "")
 
     # 判断分析 (MOMOKA_PRD: Reflect 阶段)
-    analysis = _analyze_judgment(score, label)
+    reflection = analyze_judgment(
+        score=score,
+        label=label,
+        annotated_text=annotated_text,
+        topic=judgment.get("topic", ""),
+    )
+    analysis = reflection["summary"]
+
+    preference_update = memory_store.update_preferences(judgment, reflection)
+    evolution_proposals = generate_evolution_proposals(skill_loader, memory_store, judgment)
 
     # 写入日记忆
     memory_store.write_daily(
-        f"**评分**: {score}/7 ({label})\n**分析**: {analysis}\n**上下文**: {context[:200]}"
+        "\n".join([
+            f"**评分**: {score}/7 ({label})",
+            f"**分析**: {analysis}",
+            f"**策略**: {reflection['next_guess_strategy']}",
+            f"**上下文**: {annotated_text[:200]}",
+        ])
     )
 
-    return JSONResponse({
+    payload = {
         "score": score,
         "label": label,
         "analysis": analysis,
-        "annotated_text": context[:200],
-    })
+        "reflection": reflection,
+        "annotated_text": annotated_text[:2000],
+        "preference_update": preference_update,
+        "evolution_proposals": evolution_proposals,
+    }
+
+    if should_continue:
+        followup_prompt = build_followup_prompt(
+            topic=judgment.get("topic", "") or output.get("topic", ""),
+            output_text=output.get("response", ""),
+            judgment={**judgment, "label": label},
+            reflection=reflection,
+        )
+        next_output_id = f"out_{uuid.uuid4().hex[:12]}"
+        followup_topic = judgment.get("topic", "") or output.get("topic", "")
+        next_feedback_boosts = memory_store.get_skill_feedback_boosts()
+        next_matched = skill_loader.match_skills(
+            followup_prompt,
+            topic=followup_topic,
+            feedback_boosts=next_feedback_boosts,
+        )
+        next_skill_reasons = [
+            {
+                "name": m["meta"]["name"],
+                "score": round(m.get("score", 0), 3),
+                "reasons": m.get("reasons", []),
+            }
+            for m in next_matched
+        ]
+        agent = create_agent(
+            followup_prompt,
+            topic=followup_topic,
+            matched_skills=next_matched,
+            feedback_boosts=next_feedback_boosts,
+        )
+        try:
+            with trace("MOMOKA Score-only Continuation"):
+                result = await Runner.run(agent, followup_prompt)
+        except Exception as e:
+            return JSONResponse({
+                **payload,
+                "error": f"续猜失败: {e}",
+            }, status_code=500)
+
+        tool_calls = extract_tool_calls(result)
+        memory_store.record_output(
+            output_id=next_output_id,
+            prompt=followup_prompt,
+            response=result.final_output,
+            topic=followup_topic,
+            matched_skills=[m["meta"]["name"] for m in next_matched],
+            tool_calls=tool_calls,
+        )
+        memory_store.write_daily(
+            f"**MOMOKA续猜**: {result.final_output[:300]}"
+        )
+        payload.update({
+            "next_output_id": next_output_id,
+            "next_response": result.final_output,
+            "next_tool_calls": tool_calls,
+            "next_skill_reasons": next_skill_reasons,
+        })
+
+    return JSONResponse(payload)
 
 
 def _analyze_judgment(score: int, label: str) -> str:

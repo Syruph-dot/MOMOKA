@@ -13,6 +13,21 @@ MEMORY_DIR = PROJECT_ROOT / "memory"
 STATIC_DIR = PROJECT_ROOT / "static"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
+
+def load_local_env(project_root: Path = PROJECT_ROOT) -> bool:
+    """Load `.env` from the project root without overriding existing variables."""
+    env_path = Path(project_root) / ".env"
+    if not env_path.exists():
+        return False
+
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return False
+
+    load_dotenv(env_path, override=False)
+    return True
+
 # 批注式判断量表
 LIKERT_LABELS = {
     1: "强烈反对",

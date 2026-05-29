@@ -14,6 +14,10 @@ import os
 import uuid
 from pathlib import Path
 
+from momoka.config import load_local_env
+
+load_local_env()
+
 # 环境变量配置：优先 ALIYUN_API_KEY，回退 OPENAI_API_KEY，默认使用 DashScope
 if os.environ.get("ALIYUN_API_KEY"):
     os.environ.setdefault("OPENAI_API_KEY", os.environ["ALIYUN_API_KEY"])
@@ -38,7 +42,12 @@ skill_loader = SkillLoader(SKILLS_DIR)
 memory_store = MemoryStore(MEMORY_DIR)
 
 
-def build_system_prompt(user_message: str = "") -> str:
+def build_system_prompt(
+    user_message: str = "",
+    topic: str = "",
+    matched_skills: list[dict] | None = None,
+    feedback_boosts: dict[str, float] | None = None,
+) -> str:
     """构建完整的 system prompt = 基础 prompt + 匹配技能 + 相关记忆。"""
     parts = []
 
@@ -51,7 +60,13 @@ def build_system_prompt(user_message: str = "") -> str:
 
     # 2. 匹配的技能 (Memento-Skills 范式: Read 阶段)
     if user_message:
-        matched = skill_loader.match_skills(user_message)
+        matched = matched_skills
+        if matched is None:
+            matched = skill_loader.match_skills(
+                user_message,
+                topic=topic,
+                feedback_boosts=feedback_boosts,
+            )
         if matched:
             skills_text = format_skill_prompt(matched)
             parts.append(skills_text)
@@ -60,6 +75,10 @@ def build_system_prompt(user_message: str = "") -> str:
     memory_context = memory_store.get_injectable_context()
     if memory_context.strip():
         parts.append(f"\n## 最近记忆\n{memory_context}")
+
+    preference_context = memory_store.get_preference_context()
+    if preference_context.strip():
+        parts.append(preference_context)
 
     # 4. 用户最近反馈（批注判断闭环）
     recent = memory_store.get_recent_judgments(3)
@@ -78,11 +97,21 @@ def build_system_prompt(user_message: str = "") -> str:
     return "\n".join(parts)
 
 
-def create_agent(user_message: str = "") -> Agent:
+def create_agent(
+    user_message: str = "",
+    topic: str = "",
+    matched_skills: list[dict] | None = None,
+    feedback_boosts: dict[str, float] | None = None,
+) -> Agent:
     """创建 MOMOKA Agent 实例，注入技能和记忆。"""
     return Agent(
         name="MOMOKA",
-        instructions=build_system_prompt(user_message),
+        instructions=build_system_prompt(
+            user_message,
+            topic=topic,
+            matched_skills=matched_skills,
+            feedback_boosts=feedback_boosts,
+        ),
         model=os.environ["MOMOKA_MODEL"],
         tools=[
             get_current_time,
