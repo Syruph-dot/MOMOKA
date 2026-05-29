@@ -433,14 +433,19 @@ async def api_list_directories(request: Request) -> JSONResponse:
     # 如果没有指定路径，返回系统根目录（Windows 下返回驱动器列表）
     if current is None:
         if os.name == "nt":  # Windows
-            import subprocess
-            result = subprocess.run(["wmic", "logicaldisk", "get", "name"],
-                                    capture_output=True, text=True, timeout=5)
+            try:
+                drives_raw = os.listdrives()
+            except AttributeError:
+                # Python < 3.12 回退
+                drives_raw = []
+                for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                    candidate = f"{letter}:\\"
+                    if os.path.exists(candidate):
+                        drives_raw.append(candidate)
             drives = []
-            for line in result.stdout.splitlines():
-                line = line.strip()
-                if line and line.endswith(":") and line != "Name":
-                    drives.append({"name": line, "path": line + "\\", "is_dir": True})
+            for d in drives_raw:
+                name = d.rstrip("\\")
+                drives.append({"name": name, "path": d, "is_dir": True})
             return JSONResponse({
                 "path": "",
                 "parent": None,
