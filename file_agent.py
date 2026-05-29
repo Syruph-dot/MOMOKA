@@ -18,6 +18,8 @@ from pathlib import Path
 if os.environ.get("ALIYUN_API_KEY"):
     os.environ.setdefault("OPENAI_API_KEY", os.environ["ALIYUN_API_KEY"])
 os.environ.setdefault("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+os.environ.setdefault("MOMOKA_MODEL", "qwen-plus")
+os.environ.setdefault("OPENAI_DEFAULT_MODEL", os.environ["MOMOKA_MODEL"])
 
 from agents import Agent, Runner, trace
 
@@ -67,6 +69,7 @@ def create_agent(user_message: str = "") -> Agent:
     return Agent(
         name="MOMOKA",
         instructions=build_system_prompt(user_message),
+        model=os.environ["MOMOKA_MODEL"],
         tools=[
             get_current_time,
             read_file,
