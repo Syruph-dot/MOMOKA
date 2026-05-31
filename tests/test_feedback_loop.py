@@ -1,13 +1,181 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import file_agent
 from momoka.config import LIKERT_LABELS
 from momoka.feedback import analyze_judgment, build_followup_prompt
 from momoka.memory import MemoryStore
+from momoka.runtime_context import AnnotationRuntimeController
 
 
 class FeedbackLoopTests(unittest.TestCase):
+    def test_sync_runtime_control_can_auto_revise_output(self):
+        class FakeResult:
+            def __init__(self, output: str):
+                self.final_output = output
+                self.new_items = []
+
+        def fake_run_sync(agent, message):
+            if "## 输出修订指令" in message:
+                return FakeResult("修订后的输出")
+            if "继续写这个小说" in message:
+                return FakeResult("终端里再次闪过蓝光")
+            return FakeResult("第一轮输出")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            store.record_output(
+                output_id="out_sync_block",
+                prompt="继续写小说",
+                response="这里用了蓝光",
+                topic="小说",
+            )
+            store.record_judgment("out_sync_block", 2, "蓝光", "可以是别的颜色的光")
+
+            with (
+                patch.object(file_agent, "memory_store", store),
+                patch.object(file_agent.Runner, "run_sync", side_effect=fake_run_sync),
+            ):
+                result, runtime_context, assessment = file_agent.run_with_annotation_runtime_control_sync(
+                    agent=object(),
+                    user_message="继续写这个小说",
+                    topic="小说",
+                )
+
+            self.assertEqual(result.final_output, "修订后的输出")
+            self.assertIn("可以是别的颜色的光", runtime_context)
+            self.assertEqual(assessment["action"], "revise")
+            self.assertTrue(any("蓝光" in reason for reason in assessment["reasons"]))
+
+    def test_system_prompt_excludes_raw_annotation_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            store.record_output(
+                output_id="out_prompt",
+                prompt="继续猜",
+                response="先沿着这个方向写下去",
+                topic="批注账本",
+            )
+            store.record_judgment("out_prompt", 2, "先沿着这个方向", "这里的判断标准错了")
+
+            with patch.object(file_agent, "memory_store", store):
+                prompt = file_agent.build_system_prompt("继续", topic="批注账本")
+
+            self.assertNotIn("用户最近反馈", prompt)
+            self.assertNotIn("<AnnotateText>", prompt)
+            self.assertNotIn("这里的判断标准错了", prompt)
+
+    def test_annotation_runtime_context_is_built_from_full_ledger_not_recent_three(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            controller = AnnotationRuntimeController(store)
+
+            comments = [
+                "第一条批注",
+                "第二条批注",
+                "第三条批注",
+                "第四条批注",
+                "第五条批注",
+            ]
+            for idx, comment in enumerate(comments, 1):
+                output_id = f"out_rule_{idx}"
+                store.record_output(
+                    output_id=output_id,
+                    prompt="继续写",
+                    response=f"输出 {idx}",
+                    topic="小说",
+                )
+                store.record_judgment(output_id, 6 if idx % 2 else 2, f"片段 {idx}", comment)
+
+            bundle = controller.build_runtime_bundle(
+                user_message="继续写这个小说",
+                topic="小说",
+            )
+            runtime_text = controller.render_runtime_context(bundle)
+
+            self.assertEqual(bundle["ledger_size"], 5)
+            self.assertIn("第一条批注", runtime_text)
+            self.assertIn("第五条批注", runtime_text)
+            self.assertIn("## 批注账本规则", runtime_text)
+
+    def test_system_prompt_filters_annotation_entries_from_daily_memory_and_preferences(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            store.write_daily("**用户**: 普通记录\n**Agent**: 普通回复")
+            store.write_daily("**评分**: 2/7\n**分析**: 这里不对\n**文字批注**: 删掉这个判断")
+            pref_payload = {
+                "candidates": [],
+                "promoted": [
+                    {
+                        "key": "prefer:小说:保留这种判断路径",
+                        "polarity": "prefer",
+                        "signal": "保留这种判断路径",
+                        "topic": "小说",
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+            store._write_json_obj(store.preferences_path(), pref_payload)
+
+            with patch.object(file_agent, "memory_store", store):
+                prompt = file_agent.build_system_prompt("继续", topic="小说")
+
+            self.assertIn("普通记录", prompt)
+            self.assertNotIn("删掉这个判断", prompt)
+            self.assertNotIn("保留这种判断路径", prompt)
+
+    def test_annotation_runtime_controller_can_flag_output_for_same_turn_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            controller = AnnotationRuntimeController(store)
+            store.record_output(
+                output_id="out_bad_rule",
+                prompt="继续写小说",
+                response="这里用了蓝光",
+                topic="小说",
+            )
+            store.record_judgment("out_bad_rule", 2, "蓝光", "可以是别的颜色的光")
+
+            bundle = controller.build_runtime_bundle("继续写这个小说", topic="小说")
+            assessment = controller.assess_output(bundle, "终端里再次闪过蓝光")
+
+            self.assertEqual(assessment["action"], "revise")
+            self.assertTrue(any("蓝光" in reason for reason in assessment["reasons"]))
+            self.assertIn("可以是别的颜色的光", assessment["revision_prompt"])
+
+    def test_annotation_runtime_controller_can_build_runtime_and_revision_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            controller = AnnotationRuntimeController(store)
+            store.record_output(
+                output_id="out_runtime_build",
+                prompt="继续写小说",
+                response="这里用了蓝光",
+                topic="小说",
+            )
+            store.record_judgment("out_runtime_build", 2, "蓝光", "可以是别的颜色的光")
+
+            envelope = controller.build_runtime_envelope(
+                user_message="继续写这个小说",
+                topic="小说",
+                request_heading="当前用户请求",
+            )
+            assessment = controller.assess_output(envelope["bundle"], "终端里再次闪过蓝光")
+            revision_input = controller.build_revision_input(
+                runtime_context=envelope["runtime_context"],
+                request_heading="当前用户请求",
+                request_text="继续写这个小说",
+                assessment=assessment,
+            )
+
+            self.assertIn("## 批注账本规则", envelope["runtime_context"])
+            self.assertIn("## 当前用户请求", envelope["runtime_input"])
+            self.assertIn("继续写这个小说", envelope["runtime_input"])
+            self.assertIn("## 输出修订指令", revision_input)
+            self.assertIn("可以是别的颜色的光", revision_input)
+
     def test_output_record_can_be_used_as_default_annotation_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = MemoryStore(Path(tmp))

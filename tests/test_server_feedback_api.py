@@ -16,12 +16,124 @@ class FakeResult:
 
 
 async def fake_runner_run(agent, message):
+    if "## 输出修订指令" in message:
+        return FakeResult("修订后的输出")
+    if "继续写这个小说" in message:
+        return FakeResult("终端里再次闪过蓝光")
     if "上一轮输出" in message:
         return FakeResult("下一轮主动猜测")
     return FakeResult("第一轮输出")
 
 
 class ServerFeedbackApiTests(unittest.TestCase):
+    def test_judge_continuation_can_auto_revise_output_when_annotation_controller_flags_it(self):
+        async def continuation_runner(agent, message):
+            if "## 输出修订指令" in message:
+                return FakeResult("修订后的输出")
+            if "上一轮输出" in message:
+                return FakeResult("终端里再次闪过蓝光")
+            return FakeResult("第一轮输出")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            store.record_output(
+                output_id="out_hist_continue_block",
+                prompt="继续写小说",
+                response="这里用了蓝光",
+                topic="小说",
+            )
+            store.record_judgment("out_hist_continue_block", 2, "蓝光", "可以是别的颜色的光")
+            store.record_output(
+                output_id="out_continue_seed",
+                prompt="继续写小说",
+                response="第一轮输出",
+                topic="小说",
+            )
+            client = TestClient(server.app)
+
+            with (
+                patch.object(server, "memory_store", store),
+                patch.object(server.Runner, "run", side_effect=continuation_runner),
+                patch.object(server, "trace", _noop_trace),
+            ):
+                judge_res = client.post(
+                    "/api/judge",
+                    json={
+                        "output_id": "out_continue_seed",
+                        "score": 7,
+                        "context": "",
+                        "comment": "继续往下写",
+                        "continue": True,
+                    },
+                )
+
+                self.assertEqual(judge_res.status_code, 200)
+                payload = judge_res.json()
+                self.assertEqual(payload["next_response"], "修订后的输出")
+                self.assertEqual(payload["next_output_assessment"]["action"], "revise")
+                self.assertIn("蓝光", " ".join(payload["next_output_assessment"]["reasons"]))
+
+    def test_chat_can_auto_revise_output_when_annotation_controller_flags_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            store.record_output(
+                output_id="out_hist_block",
+                prompt="继续写小说",
+                response="这里用了蓝光",
+                topic="小说",
+            )
+            store.record_judgment("out_hist_block", 2, "蓝光", "可以是别的颜色的光")
+            client = TestClient(server.app)
+
+            with (
+                patch.object(server, "memory_store", store),
+                patch.object(server.Runner, "run", side_effect=fake_runner_run),
+                patch.object(server, "trace", _noop_trace),
+            ):
+                chat_res = client.post(
+                    "/api/chat",
+                    json={
+                        "message": "继续写这个小说",
+                        "topic": "小说",
+                    },
+                )
+
+                self.assertEqual(chat_res.status_code, 200)
+                payload = chat_res.json()
+                self.assertEqual(payload["response"], "修订后的输出")
+                self.assertEqual(payload["output_assessment"]["action"], "revise")
+                self.assertIn("蓝光", " ".join(payload["output_assessment"]["reasons"]))
+
+    def test_chat_returns_annotation_runtime_context_separately_from_system_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(Path(tmp))
+            store.record_output(
+                output_id="out_hist_1",
+                prompt="继续",
+                response="旧输出",
+                topic="MOMOKA 批注账本",
+            )
+            store.record_judgment("out_hist_1", 6, "旧片段", "保留这种判断路径")
+            client = TestClient(server.app)
+
+            with (
+                patch.object(server, "memory_store", store),
+                patch.object(server.Runner, "run", side_effect=fake_runner_run),
+                patch.object(server, "trace", _noop_trace),
+            ):
+                chat_res = client.post(
+                    "/api/chat",
+                    json={
+                        "message": "继续这个判断",
+                        "topic": "MOMOKA 批注账本",
+                    },
+                )
+
+                self.assertEqual(chat_res.status_code, 200)
+                payload = chat_res.json()
+                self.assertIn("annotation_runtime_context", payload)
+                self.assertIn("保留这种判断路径", payload["annotation_runtime_context"])
+
     def test_judge_rejects_unknown_output_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = MemoryStore(Path(tmp))

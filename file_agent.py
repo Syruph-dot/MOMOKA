@@ -33,9 +33,10 @@ from tools.file_writer import write_file
 from tools.file_lister import list_files
 from tools.file_appender import append_file
 
-from momoka.config import PROMPTS_DIR, SKILLS_DIR, MEMORY_DIR, LIKERT_LABELS, current_work_dir
+from momoka.config import PROMPTS_DIR, SKILLS_DIR, MEMORY_DIR, current_work_dir
 from momoka.skill_loader import SkillLoader, format_skill_prompt
 from momoka.memory import MemoryStore
+from momoka.runtime_context import AnnotationRuntimeController
 
 # 全局实例
 skill_loader = SkillLoader(SKILLS_DIR)
@@ -85,28 +86,37 @@ def build_system_prompt(
     if memory_context.strip():
         parts.append(f"\n## 最近记忆\n{memory_context}")
 
-    preference_context = memory_store.get_preference_context()
-    if preference_context.strip():
-        parts.append(preference_context)
-
-    # 4. 用户最近反馈（批注判断闭环）
-    recent = memory_store.get_recent_judgments(3)
-    if recent:
-        feedback_lines = ["\n## 用户最近反馈"]
-        for r in recent:
-            text = r.get("context", "")
-            score = r.get("score", 0)
-            feeling = LIKERT_LABELS.get(score, "未知")
-            comment = (r.get("comment") or "").strip()
-            comment_line = f"\n<UserComment>{comment}</UserComment>" if comment else ""
-            feedback_lines.append(
-                f"\n<AnnotateText>{{{text}}}</AnnotateText>"
-                f"\n<UserScore>score:{score}, feeling:{feeling}</UserScore>"
-                f"{comment_line}"
-            )
-        parts.append("\n".join(feedback_lines))
-
     return "\n".join(parts)
+
+def run_with_annotation_runtime_control_sync(
+    *,
+    agent,
+    user_message: str,
+    topic: str = "",
+    request_heading: str = "当前用户请求",
+):
+    controller = AnnotationRuntimeController(memory_store)
+    envelope = controller.build_runtime_envelope(
+        user_message=user_message,
+        topic=topic,
+        request_heading=request_heading,
+    )
+    bundle = envelope["bundle"]
+    runtime_context = envelope["runtime_context"]
+    runtime_input = envelope["runtime_input"]
+
+    result = Runner.run_sync(agent, runtime_input)
+    assessment = controller.assess_output(bundle, result.final_output)
+    if assessment.get("action") == "revise":
+        revision_input = controller.build_revision_input(
+            runtime_context=runtime_context,
+            request_heading=request_heading,
+            request_text=user_message,
+            assessment=assessment,
+        )
+        result = Runner.run_sync(agent, revision_input)
+
+    return result, runtime_context, assessment
 
 
 def create_agent(
@@ -184,7 +194,11 @@ def run_cli():
         agent = create_agent(user_input, work_dir=cli_work_dir)
 
         with trace("MOMOKA Agent"):
-            result = Runner.run_sync(agent, user_input)
+            result, _runtime_context, _assessment = run_with_annotation_runtime_control_sync(
+                agent=agent,
+                user_message=user_input,
+                topic=user_input[:80],
+            )
 
         log_tool_calls(result)
         print(f"\n{result.final_output}")

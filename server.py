@@ -3,12 +3,11 @@ MOMOKA HTTP API 服务器
 提供会话管理、聊天、评分和静态文件服务。
 """
 
-import json
 import os
-import asyncio
 import uuid
 from pathlib import Path
 
+import file_agent as file_agent_module
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
@@ -22,14 +21,57 @@ from file_agent import create_agent, skill_loader, memory_store
 from momoka.config import LIKERT_LABELS, current_work_dir
 from momoka.feedback import analyze_judgment, build_followup_prompt
 from momoka.evolution import generate_evolution_proposals
-from momoka.skill_loader import format_skill_prompt
 from momoka.session_manager import SessionManager
+from momoka.runtime_context import AnnotationRuntimeController
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 STATIC_DIR = PROJECT_ROOT / "static"
 
 # 全局会话管理器
 session_manager = SessionManager(memory_store.memory_dir)
+
+
+def _sync_agent_runtime_state():
+    """Keep file_agent globals aligned when tests patch server-level singletons."""
+    file_agent_module.memory_store = memory_store
+
+
+async def _run_with_annotation_runtime_control(
+    *,
+    agent,
+    initial_input: str,
+    annotation_runtime_context: str,
+    annotation_runtime_bundle: dict,
+    request_heading: str,
+    request_text: str,
+    primary_trace_name: str,
+):
+    """Run the agent once, then let the annotation ledger force a same-turn revision if needed."""
+    controller = AnnotationRuntimeController(memory_store)
+    try:
+        with trace(primary_trace_name):
+            result = await Runner.run(agent, initial_input)
+    except Exception as e:
+        raise RuntimeError(str(e)) from e
+
+    output_assessment = controller.assess_output(
+        annotation_runtime_bundle,
+        result.final_output,
+    )
+    if output_assessment.get("action") == "revise":
+        revision_input = controller.build_revision_input(
+            runtime_context=annotation_runtime_context,
+            request_heading=request_heading,
+            request_text=request_text,
+            assessment=output_assessment,
+        )
+        try:
+            with trace("MOMOKA Output Revision"):
+                result = await Runner.run(agent, revision_input)
+        except Exception as e:
+            raise RuntimeError(f"输出修订失败: {e}") from e
+
+    return result, output_assessment
 
 
 def check_config() -> dict:
@@ -153,6 +195,7 @@ async def api_get_session_messages(request: Request) -> JSONResponse:
 
 async def api_chat(request: Request) -> JSONResponse:
     """处理聊天请求（支持会话绑定）。"""
+    _sync_agent_runtime_state()
     try:
         body = await request.json()
     except Exception:
@@ -191,6 +234,16 @@ async def api_chat(request: Request) -> JSONResponse:
         for m in matched
     ]
 
+    controller = AnnotationRuntimeController(memory_store)
+    annotation_envelope = controller.build_runtime_envelope(
+        user_message=message,
+        topic=topic,
+        request_heading="当前用户请求",
+    )
+    annotation_runtime_bundle = annotation_envelope["bundle"]
+    annotation_runtime_context = annotation_envelope["runtime_context"]
+    runtime_message = annotation_envelope["runtime_input"]
+
     # 创建 Agent（含技能匹配 + 记忆注入）
     agent = create_agent(
         message,
@@ -201,9 +254,16 @@ async def api_chat(request: Request) -> JSONResponse:
     )
 
     try:
-        with trace("MOMOKA API"):
-            result = await Runner.run(agent, message)
-    except Exception as e:
+        result, output_assessment = await _run_with_annotation_runtime_control(
+            agent=agent,
+            initial_input=runtime_message,
+            annotation_runtime_context=annotation_runtime_context,
+            annotation_runtime_bundle=annotation_runtime_bundle,
+            request_heading="当前用户请求",
+            request_text=message,
+            primary_trace_name="MOMOKA API",
+        )
+    except RuntimeError as e:
         msg = str(e)
         if "api_key" in msg.lower() or "OPENAI_API_KEY" in msg or "ALIYUN_API_KEY" in msg:
             return JSONResponse({
@@ -211,6 +271,12 @@ async def api_chat(request: Request) -> JSONResponse:
                 "detail": "请设置环境变量 ALIYUN_API_KEY（或回退 OPENAI_API_KEY）",
                 "tool_calls": [],
             }, status_code=503)
+        if msg.startswith("输出修订失败:"):
+            return JSONResponse({
+                "error": msg,
+                "annotation_runtime_context": annotation_runtime_context,
+                "tool_calls": [],
+            }, status_code=500)
         return JSONResponse({
             "error": f"Agent 执行失败: {msg}",
             "tool_calls": [],
@@ -248,6 +314,8 @@ async def api_chat(request: Request) -> JSONResponse:
         "output_id": output_id,
         "topic": topic,
         "response": result.final_output,
+        "annotation_runtime_context": annotation_runtime_context,
+        "output_assessment": output_assessment,
         "tool_calls": tool_calls,
         "matched_skills": matched_names,
         "skill_reasons": skill_reasons,
@@ -257,6 +325,7 @@ async def api_chat(request: Request) -> JSONResponse:
 
 async def api_judge(request: Request) -> JSONResponse:
     """处理用户的批注判断 (MOMOKA_PRD 核心交互: Likert 7 点量表)。"""
+    _sync_agent_runtime_state()
     try:
         body = await request.json()
     except Exception:
@@ -332,6 +401,15 @@ async def api_judge(request: Request) -> JSONResponse:
             judgment={**judgment, "label": label},
             reflection=reflection,
         )
+        controller = AnnotationRuntimeController(memory_store)
+        annotation_envelope = controller.build_runtime_envelope(
+            user_message=followup_prompt,
+            topic=judgment.get("topic", "") or output.get("topic", ""),
+            request_heading="当前续猜请求",
+        )
+        annotation_runtime_context = annotation_envelope["runtime_context"]
+        annotation_runtime_bundle = annotation_envelope["bundle"]
+        runtime_followup_prompt = annotation_envelope["runtime_input"]
         next_output_id = f"out_{uuid.uuid4().hex[:12]}"
         followup_topic = judgment.get("topic", "") or output.get("topic", "")
         next_feedback_boosts = memory_store.get_skill_feedback_boosts()
@@ -365,9 +443,16 @@ async def api_judge(request: Request) -> JSONResponse:
             work_dir=judge_work_dir,
         )
         try:
-            with trace("MOMOKA Score-only Continuation"):
-                result = await Runner.run(agent, followup_prompt)
-        except Exception as e:
+            result, next_output_assessment = await _run_with_annotation_runtime_control(
+                agent=agent,
+                initial_input=runtime_followup_prompt,
+                annotation_runtime_context=annotation_runtime_context,
+                annotation_runtime_bundle=annotation_runtime_bundle,
+                request_heading="当前续猜请求",
+                request_text=followup_prompt,
+                primary_trace_name="MOMOKA Score-only Continuation",
+            )
+        except RuntimeError as e:
             return JSONResponse({
                 **payload,
                 "error": f"续猜失败: {e}",
@@ -389,6 +474,8 @@ async def api_judge(request: Request) -> JSONResponse:
         payload.update({
             "next_output_id": next_output_id,
             "next_response": result.final_output,
+            "next_annotation_runtime_context": annotation_runtime_context,
+            "next_output_assessment": next_output_assessment,
             "next_tool_calls": tool_calls,
             "next_skill_reasons": next_skill_reasons,
         })

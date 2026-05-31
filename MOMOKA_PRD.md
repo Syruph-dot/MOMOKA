@@ -170,13 +170,15 @@ evolved_from: []
 - 若文件非文本：报告无法处理，建议转换工具
 ```
 
-#### 3.3.3 记忆层（按时间窗口加载）
+#### 3.3.3 记忆层（静态注入层 vs 批注账本层）
 
 | 路径 | 用途 | 加载策略 |
 |------|------|---------|
-| `memory/MEMORY.md` | 长期记忆：已验证的事实、决策记录、持久学习 | 每次 DM 主会话 |
-| `memory/YYYY-MM-DD.md` | 日记忆：当天观察、临时笔记、交互日志 | 当天 + 昨天自动加载 |
-| `memory/.dreams/short-term-recall.json` | 短期召回信号：每次记忆检索的记录 | 后台异步写入 |
+| `memory/MEMORY.md` | 长期记忆：已验证的事实、决策记录、持久学习 | 作为 system prompt 的静态记忆源 |
+| `memory/YYYY-MM-DD.md` | 日记忆：当天观察、临时笔记、交互日志 | 当天 + 昨天过滤后注入 system prompt |
+| `memory/.annotations/ledger.json` | 批注账本：用户评分、选区、文字批注、技能关联证据 | 不直接进 system prompt；运行时按相关性择取 |
+| `memory/.outputs/outputs.json` | 输出台账：每次 Agent 输出的 prompt/response/tool calls | 为批注账本与续猜链路提供可追溯上下文 |
+| `memory/.dreams/short-term-recall.json` | 兼容镜像：旧路径读者仍可读取同一批注记录 | 仅兼容写入，不再作为主组织层 |
 | `memory/.dreams/long-term/` | 长期记忆候选池：待晋升的记忆片段 | Dreaming 流程消费 |
 
 ### 3.4 自我进化闭环：Read → Guess → Judge → Reflect → Write

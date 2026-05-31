@@ -381,8 +381,14 @@ async function sendJudge(outputId, score, scope) {
 
     const labelMap = {1:'强烈反对',2:'反对',3:'不太赞同',4:'中立',5:'有点赞同',6:'赞同',7:'强烈赞同'};
     const label = labelMap[score] || '未知';
-    const annotation = `<AnnotateText>{${selectedText}}</AnnotateText>\n<UserScore>score:${score}, feeling:${label}</UserScore>\n<UserComment>${comment}</UserComment>`;
-    console.log(`[MOMOKA] 标注格式:\n${annotation}`);
+    console.log('[MOMOKA] 提交批注账本事件:', {
+        output_id: outputId,
+        score,
+        label,
+        context: selectedText,
+        comment,
+        continue: !isSelection,
+    });
 
     const shouldContinue = !isSelection; // 划词只 append，块级评分才续猜
     let hadError = false;

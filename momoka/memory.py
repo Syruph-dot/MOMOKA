@@ -1,37 +1,40 @@
 """
-MOMOKA 记忆系统 — 日记忆 + 长期记忆的外部化 Markdown 存储。
-参考: OpenClaw (memory/YYYY-MM-DD.md + MEMORY.md)
+MOMOKA memory store.
+
+Separates:
+- output ledger: every agent output
+- annotation ledger: every user annotation / grading event
+- promoted preferences
+- evolution proposals
+- system-injectable daily memory
 """
+
+from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
-from datetime import datetime
 
 
 class MemoryStore:
-    """文件系统记忆存储。"""
+    """Filesystem-backed memory storage."""
 
     def __init__(self, memory_dir: Path):
         self.memory_dir = Path(memory_dir)
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
-        dreams_dir = self.memory_dir / ".dreams" / "long-term"
-        dreams_dir.mkdir(parents=True, exist_ok=True)
+        (self.memory_dir / ".annotations").mkdir(parents=True, exist_ok=True)
+        (self.memory_dir / ".dreams" / "long-term").mkdir(parents=True, exist_ok=True)
+        (self.memory_dir / ".outputs").mkdir(parents=True, exist_ok=True)
+        (self.memory_dir / ".evolog").mkdir(parents=True, exist_ok=True)
 
-        output_dir = self.memory_dir / ".outputs"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        evolog_dir = self.memory_dir / ".evolog"
-        evolog_dir.mkdir(parents=True, exist_ok=True)
-
-    # -- 日记忆 ---
+    # -- daily memory -------------------------------------------------
     def daily_path(self, date: datetime | None = None) -> Path:
         dt = date or datetime.now()
         return self.memory_dir / f"{dt.strftime('%Y-%m-%d')}.md"
 
     def write_daily(self, content: str, date: datetime | None = None):
-        """追加写入日记忆。"""
         path = self.daily_path(date)
         ts = datetime.now().strftime("%H:%M:%S")
         entry = f"\n## {ts}\n{content}\n"
@@ -40,23 +43,46 @@ class MemoryStore:
         return path
 
     def read_daily(self, days_back: int = 2) -> str:
-        """加载近 N 天的日记忆。"""
         lines = []
         for i in range(days_back):
-            import datetime as _dt
-            dt = datetime.now() - _dt.timedelta(days=i)
+            dt = datetime.now() - timedelta(days=i)
             path = self.daily_path(dt)
             if path.exists():
                 lines.append(f"\n### 记忆: {dt.strftime('%Y-%m-%d')}")
                 lines.append(path.read_text(encoding="utf-8")[:2000])
         return "\n".join(lines)
 
-    # -- 长期记忆 ---
+    def _filter_daily_entries_for_system(self, content: str) -> str:
+        sections = re.split(r"(?m)(?=^## )", content)
+        blocked_markers = ("**评分**", "**分析**", "**策略**", "**上下文**", "**文字批注**")
+        kept: list[str] = []
+        for section in sections:
+            stripped = section.strip()
+            if not stripped:
+                continue
+            if any(marker in stripped for marker in blocked_markers):
+                continue
+            kept.append(section.rstrip())
+        return "\n".join(kept).strip()
+
+    def get_injectable_context(self) -> str:
+        parts: list[str] = []
+        for i in range(2):
+            dt = datetime.now() - timedelta(days=i)
+            path = self.daily_path(dt)
+            if not path.exists():
+                continue
+            filtered = self._filter_daily_entries_for_system(path.read_text(encoding="utf-8")[:2000])
+            if filtered:
+                parts.append(f"\n### 记忆: {dt.strftime('%Y-%m-%d')}")
+                parts.append(filtered)
+        return "\n".join(parts)
+
+    # -- long-term memory --------------------------------------------
     def long_term_path(self) -> Path:
         return self.memory_dir / "MEMORY.md"
 
     def write_long_term(self, content: str):
-        """写入长期记忆。"""
         path = self.long_term_path()
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
         entry = f"\n## {ts}\n{content}\n"
@@ -69,10 +95,7 @@ class MemoryStore:
             return ""
         return path.read_text(encoding="utf-8")
 
-    # -- 输出台账 ---
-    def outputs_path(self) -> Path:
-        return self.memory_dir / ".outputs" / "outputs.json"
-
+    # -- generic json helpers ----------------------------------------
     def _read_json_list(self, path: Path) -> list[dict]:
         if not path.exists():
             return []
@@ -101,6 +124,10 @@ class MemoryStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # -- output ledger ------------------------------------------------
+    def outputs_path(self) -> Path:
+        return self.memory_dir / ".outputs" / "outputs.json"
+
     def record_output(
         self,
         output_id: str,
@@ -111,7 +138,6 @@ class MemoryStore:
         tool_calls: list[dict] | None = None,
         session_id: str | None = None,
     ) -> dict:
-        """Record a full Agent output so later judgments can cite it."""
         record = {
             "output_id": output_id,
             "topic": topic,
@@ -129,15 +155,29 @@ class MemoryStore:
         return record
 
     def get_output(self, output_id: str) -> dict | None:
-        """Look up a recorded Agent output by id."""
         for record in reversed(self._read_json_list(self.outputs_path())):
             if record.get("output_id") == output_id:
                 return record
         return None
 
-    # -- 判断记录 ---
+    # -- annotation ledger -------------------------------------------
+    def annotation_ledger_path(self) -> Path:
+        return self.memory_dir / ".annotations" / "ledger.json"
+
+    def legacy_judgments_path(self) -> Path:
+        return self.memory_dir / ".dreams" / "short-term-recall.json"
+
+    def _read_annotation_records(self) -> list[dict]:
+        records = self._read_json_list(self.annotation_ledger_path())
+        if records:
+            return records
+        return self._read_json_list(self.legacy_judgments_path())
+
+    def _write_annotation_records(self, records: list[dict]):
+        self._write_json_list(self.annotation_ledger_path(), records)
+        self._write_json_list(self.legacy_judgments_path(), records)
+
     def record_judgment(self, output_id: str, score: int, context: str = "", comment: str = ""):
-        """记录用户的一次批注判断。"""
         output = self.get_output(output_id) or {}
         selected = context.strip()
         note = comment.strip()
@@ -154,27 +194,19 @@ class MemoryStore:
             "matched_skills": output.get("matched_skills", []),
             "timestamp": datetime.now().isoformat(),
         }
-        path = self.memory_dir / ".dreams" / "short-term-recall.json"
-        records = self._read_json_list(path)
+        records = self._read_annotation_records()
         records.append(record)
-        # 只保留最近 100 条
-        records = records[-100:]
-        self._write_json_list(path, records)
+        self._write_annotation_records(records)
         return record
 
-    # -- 获取最近评分记录 ---
     def get_recent_judgments(self, count: int = 3) -> list[dict]:
-        """读取最近 N 条评分记录。"""
-        path = self.memory_dir / ".dreams" / "short-term-recall.json"
-        if not path.exists():
-            return []
-        try:
-            records = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return []
+        records = self._read_annotation_records()
         return records[-count:]
 
-    # -- 偏好晋升 ---
+    def list_annotation_records(self) -> list[dict]:
+        return list(self._read_annotation_records())
+
+    # -- preferences --------------------------------------------------
     def preferences_path(self) -> Path:
         return self.memory_dir / ".preferences.json"
 
@@ -182,14 +214,25 @@ class MemoryStore:
         compact = re.sub(r"\s+", "", text.strip().lower())
         return compact[:120]
 
+    def _derive_preference_signal(self, judgment: dict, reflection: dict) -> str:
+        comment = (judgment.get("comment") or "").strip()
+        context = (judgment.get("context") or "").strip()
+        polarity = "prefer" if int(judgment.get("score", 0)) >= 6 else "avoid"
+        if comment:
+            if context:
+                return f"{polarity}:{context} => {comment}"[:240]
+            return f"{polarity}:{comment}"[:240]
+        if context:
+            return f"{polarity}:{context}"[:240]
+        return (reflection.get("intent_hypothesis") or "").strip()[:240]
+
     def update_preferences(self, judgment: dict, reflection: dict) -> dict:
-        """基于重复评分晋升稳定偏好，返回本次更新结果。"""
         score = int(judgment.get("score", 0))
         if score not in (1, 2, 6, 7):
             return {"updated": False, "promoted": []}
 
         polarity = "prefer" if score >= 6 else "avoid"
-        signal = (reflection.get("intent_hypothesis") or judgment.get("context") or "").strip()
+        signal = self._derive_preference_signal(judgment, reflection)
         if not signal:
             return {"updated": False, "promoted": []}
 
@@ -268,8 +311,11 @@ class MemoryStore:
         ])
         self.write_long_term(content)
 
+    def get_promoted_preferences(self) -> list[dict]:
+        payload = self._read_json_obj(self.preferences_path(), {"candidates": [], "promoted": []})
+        return list(payload.get("promoted", []))
+
     def get_preference_context(self, limit: int = 5) -> str:
-        """返回已晋升偏好的精简摘要。"""
         payload = self._read_json_obj(self.preferences_path(), {"candidates": [], "promoted": []})
         promoted = payload.get("promoted", [])
         if not promoted:
@@ -277,15 +323,13 @@ class MemoryStore:
         lines = ["\n## 稳定偏好"]
         for pref in promoted[-limit:]:
             lines.append(
-                f"- [{pref.get('polarity', '')}] {pref.get('signal', '')} (主题: {pref.get('topic', '')}, 置信度: {pref.get('confidence', 0):.2f})"
+                f"- [{pref.get('polarity', '')}] {pref.get('signal', '')} (主题: {pref.get('topic', '')}, 置信度 {pref.get('confidence', 0):.2f})"
             )
         return "\n".join(lines)
 
-    # -- 技能反馈权重 ---
+    # -- skill feedback weighting ------------------------------------
     def get_skill_feedback_boosts(self, max_items: int = 12) -> dict[str, float]:
-        """根据近期评分对技能权重进行调整。"""
-        path = self.memory_dir / ".dreams" / "short-term-recall.json"
-        records = self._read_json_list(path)
+        records = self._read_annotation_records()
         boosts: dict[str, float] = {}
 
         for i, record in enumerate(reversed(records[-max_items:])):
@@ -310,13 +354,11 @@ class MemoryStore:
         return boosts
 
     def get_recent_skill_judgments(self, skill_name: str, limit: int = 8) -> list[dict]:
-        """获取关联到指定技能的最近评分记录。"""
-        path = self.memory_dir / ".dreams" / "short-term-recall.json"
-        records = self._read_json_list(path)
+        records = self._read_annotation_records()
         matched = [r for r in reversed(records) if skill_name in r.get("matched_skills", [])]
         return matched[:limit]
 
-    # -- 进化提案 ---
+    # -- evolution proposals -----------------------------------------
     def proposals_path(self) -> Path:
         return self.memory_dir / ".evolog" / "proposals.json"
 
@@ -325,7 +367,6 @@ class MemoryStore:
         return self.memory_dir / ".evolog" / f"{dt.strftime('%Y-%m-%d')}.md"
 
     def record_evolution_proposal(self, proposal: dict) -> dict:
-        """记录一条进化提案 (仅记录，不自动应用)。"""
         proposals = self._read_json_list(self.proposals_path())
         key = proposal.get("key", "")
         if key:
@@ -352,18 +393,7 @@ class MemoryStore:
         md_lines.append(f"**预期变更**: {proposal.get('expected_diff', '')}")
         md_lines.append(f"**应用约束**: {proposal.get('apply_guardrails', '')}")
 
-        path = self.evolog_daily_path()
-        entry = "\n".join(md_lines) + "\n"
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(entry)
+        with open(self.evolog_daily_path(), "a", encoding="utf-8") as f:
+            f.write("\n".join(md_lines) + "\n")
 
         return proposal
-
-    # -- 上下文注入用 ---
-    def get_injectable_context(self) -> str:
-        """获取可注入 Agent 上下文的最相关记忆。"""
-        parts = []
-        recent = self.read_daily(2)
-        if recent.strip():
-            parts.append(recent)
-        return "\n".join(parts)

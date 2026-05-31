@@ -1,5 +1,14 @@
 [
   {
+    "id": "ses_f479f5c1e233",
+    "name": "写一个短篇小说",
+    "goal": "写一个短篇小说",
+    "folder_path": "D:\\ARONA\\Momoka\\testnovel",
+    "created_at": "2026-05-31T15:52:09.959198",
+    "message_count": 2,
+    "last_message_at": "2026-05-31T15:52:31.062585"
+  },
+  {
     "id": "ses_c15cfe256d04",
     "name": "撰写短篇小说",
     "goal": "撰写短篇小说",
